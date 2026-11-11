@@ -3,6 +3,7 @@ side, the real store, scheduler, gate, risk rules, executor and simulated book o
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -152,7 +153,11 @@ class TestThePreMarketTick:
         request = loop.analysts.calls[0][0]
         assert request.trade_date == "2026-11-11" and request.as_of_time == "2026-11-11 08:45 EST (before the open)"
         assert request.portfolio.cash == 100_000.0 and request.portfolio.positions == []
-        assert request.session_context == "" and request.record_to_memory is False
+        assert request.record_to_memory is False
+        told = request.session_context          # nothing happened yet this session; the size of a position is still said
+        assert told.startswith("How a target weight becomes a position in this account:")
+        assert "A full position is 20% of the account's equity: about $20,000 now, about 200 shares of NVDA at 100.00." in told
+        assert "Held now: nothing" in told and "Earlier in this session" not in told
 
     def test_each_analysis_gets_its_outcome_marks_planned(self, loop):
         loop.tick("premarket", 11, "08:45")
@@ -222,9 +227,31 @@ class TestTheSession:
         loop.tick("core", 11, "11:35")
         request = loop.analysts.calls[-1][0]
         assert "bought 196 at 102.03" in request.session_context
+        told = request.session_context
+        assert "- Held now: 196 shares, about $20,482, which is a target weight of 1.019." in told
+        assert "(Buy) asked for a target weight of 1, about 192 shares. 4 shares more than that are still held." in told
+        assert "The position is larger than a full one." in told       # it rose after it was bought
         (position,) = request.portfolio.positions
         assert (position.ticker, position.quantity) == ("NVDA", 196.0)
         assert request.as_of_time.endswith("(regular session)")
+
+    def test_an_analysis_is_told_when_its_last_target_was_not_bought(self, loop):
+        """A larger target held back for want of a second opinion must not read as already in place."""
+        loop.analysts.say("NVDA", "Overweight", "Overweight", "Buy", "Buy")
+        loop.tick("premarket", 11, "08:45")
+        loop.tick("core", 11, "09:35")
+        loop.market.prices["NVDA"] = 102.0
+        loop.tick("core", 11, "10:35")               # the second Overweight: 0.6 of a full position is bought
+        held = loop.qty()
+        loop.market.prices["NVDA"] = 104.0
+        loop.tick("core", 11, "11:35")               # Buy, the first to ask for more: held back
+        assert loop.qty() == held
+        loop.market.prices["NVDA"] = 106.0
+        loop.tick("core", 11, "12:35")
+        told = loop.analysts.calls[-1][0].session_context
+        assert f"- Held now: {held:g} shares" in told
+        assert re.search(r"\(Buy\) asked for a target weight of 1, about \d+ shares\. \d+ shares of that have not been bought\.", told)
+        assert told.index("How a target weight") < told.index("Earlier in this session")
 
     def test_a_held_position_with_a_stop_gets_a_stop_order(self, loop):
         self._confirmed_buy(loop, stop_loss=95.0)

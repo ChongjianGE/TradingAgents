@@ -371,7 +371,7 @@ def _analysis(data: _Data, md: MarkdownIt, run: dict, ruling: dict | None, outco
     state, steps = _read_artifacts(run["artifacts_dir"])
     told = [(label, state.get(key)) for label, key in (("The instrument and the time", "instrument_context"),
                                                        ("The book", "portfolio_context"),
-                                                       ("Earlier this session", "session_context"),
+                                                       ("Position size and this session so far", "session_context"),
                                                        ("Lessons from past decisions", "past_context"))]
     if any(text for _, text in told):
         body.append("<details><summary>What it was told</summary>"

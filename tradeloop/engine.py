@@ -215,9 +215,12 @@ class Engine:
         requests = []
         for ticker in tickers:
             run_id = self._run_id(tick.tick_id, ticker)
+            told = [context.sizing_context(ticker, account, prices.get(ticker),
+                                           self.store.latest_decision(ticker), self.cfg),
+                    context.session_context(self.store, ticker, day_start, moment, self.tz)]
             request = AnalysisRequest(
                 ticker=ticker, run_id=run_id, trade_date=trade_date, as_of_time=as_of, portfolio=book,
-                session_context=context.session_context(self.store, ticker, day_start, moment, self.tz),
+                session_context="\n\n".join(part for part in told if part),
                 record_to_memory=tick.kind == self.cfg.memory_record_kind)
             self.store.begin_analysis(
                 run_id=run_id, tick_id=tick.tick_id, ticker=ticker, trade_date=trade_date, kind=tick.kind,
