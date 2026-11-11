@@ -335,5 +335,13 @@ class TestTheInteractiveCharts:
         library = (dashboard._ASSETS / dashboard._CHART_LIBRARY).read_text(encoding="utf-8")
         for name in ("createChart", "createSeriesMarkers", "CandlestickSeries", "HistogramSeries", "CrosshairMode",
                      "atPriceBottom", "atPriceTop", "aboveBar", "arrowUp", "arrowDown", "subscribeCrosshairMove",
-                     "setVisibleRange", "fitContent", "attributionLogo", "autoSize"):
+                     "setVisibleRange", "fitContent", "attributionLogo", "autoSize", "clearCrosshairPosition"):
             assert name in dashboard._CHART_SCRIPT and name in library, name
+
+    def test_old_marks_come_off_before_the_candles_under_them_are_replaced(self):
+        """Seen live: with the pointer over a chart, changing from minute to daily candles made the library
+        look up the old marks in the new data and throw. They are cleared before the data is set."""
+        script = dashboard._CHART_SCRIPT
+        show = script[script.index("function show(view)"):script.index("function frame()")]
+        assert show.index("pins.setMarkers([])") < show.index("price.setData(") < show.index("pins.setMarkers(placed.marks)")
+        assert show.index("chart.clearCrosshairPosition()") < show.index("price.setData(")

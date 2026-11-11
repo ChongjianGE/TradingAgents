@@ -345,6 +345,10 @@ _CHART_SCRIPT = r"""
       var bars = daily ? (d.d || []) : candles(lastDays(d.m || [], days), seconds);
       var placed = place(bars, daily ? DAY - 1 : Math.max(seconds, 1800));
       state.bars = bars; state.daily = daily; state.notes = placed.notes; state.view = view;
+      // The old marks and the crosshair name candles that the new data may not have. Take them off
+      // first: with the pointer over the chart the library looks them up as soon as the data changes.
+      pins.setMarkers([]);
+      chart.clearCrosshairPosition();
       price.setData(bars.map(function (b) { return { time: b[0], open: b[1], high: b[2], low: b[3], close: b[4] }; }));
       volume.setData(bars.map(function (b) { return { time: b[0], value: b[5], color: faded(b[4] >= b[1] ? c.up : c.down, 0.45) }; }));
       pins.setMarkers(placed.marks);
