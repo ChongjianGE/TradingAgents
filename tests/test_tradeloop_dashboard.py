@@ -4,11 +4,13 @@ each decision with what it was based on, and what was traded."""
 from __future__ import annotations
 
 import json
+import re
+from datetime import timedelta
 
 import pytest
 
 from tests.test_tradeloop_engine import TICKERS, Loop, et
-from tradeloop import dashboard
+from tradeloop import dashboard, timeutil
 from tradeloop.alpaca import Bar
 
 
@@ -213,3 +215,120 @@ class TestTheChart:
     def test_a_flat_line_does_not_divide_by_zero(self):
         svg = dashboard._line_chart([(et(11, "09:35"), 100.0), (et(11, "10:35"), 100.0)])
         assert "<path" in svg and "nan" not in svg.lower()
+
+
+def _bars(day, start="09:30", count=78, base=100.0, step=0.1):
+    first = et(day, start)
+    return [(first + timedelta(minutes=5 * i), base + step * i) for i in range(count)]
+
+
+@pytest.mark.unit
+class TestThePriceChart:
+    """The price by five-minute bar, with a triangle where each buy and sell filled."""
+
+    def test_fewer_than_two_bars_says_so(self):
+        assert "Not enough prices" in dashboard._price_chart(_bars(11, count=1))
+
+    def test_a_buy_is_a_triangle_under_the_price_paid_and_a_sell_one_above_it(self):
+        bars = _bars(11)
+        svg = dashboard._price_chart(bars, [(et(11, "09:41"), "buy", 57.0, 100.2), (et(11, "14:02"), "sell", 12.0, 105.3)])
+        buy, sell = re.findall(r'<g class="(up|down)">.*?<polygon points="([^"]+)".*?<title>([^<]+)</title>', svg)
+        assert (buy[0], buy[2]) == ("up", "11-11 09:40 bought 57 at $100.20")
+        assert (sell[0], sell[2]) == ("down", "11-11 14:00 sold 12 at $105.30")
+        tip, left, right = (tuple(map(float, point.split(","))) for point in buy[1].split())
+        assert left[1] == right[1] > tip[1] and right[0] - left[0] >= 8      # under its tip, and wide enough to see
+        tip, left, right = (tuple(map(float, point.split(","))) for point in sell[1].split())
+        assert left[1] == right[1] < tip[1]
+        assert ">+57</text>" in svg and ">−12</text>" in svg
+        assert '<span class="up">▲</span> bought' in svg and '<span class="down">▼</span> sold' in svg
+
+    def test_the_tip_is_at_the_price_paid_not_at_the_bars_close(self):
+        bars = [(et(11, "09:30"), 100.0), (et(11, "09:35"), 100.0), (et(11, "09:40"), 100.0)]
+
+        def tip_and_line(price):
+            svg = dashboard._price_chart(bars, [(et(11, "09:36"), "buy", 1.0, price)])
+            return (float(re.search(r'<polygon points="[\d.]+,([\d.]+) ', svg).group(1)),
+                    float(re.search(r'<path d="M[\d.]+,([\d.]+) ', svg).group(1)))
+
+        tip, line = tip_and_line(98.0)
+        assert tip > line                                # paid less than the bars show: the tip is below the line
+        tip, line = tip_and_line(102.0)
+        assert tip < line
+
+    def test_an_order_filled_in_parts_within_one_bar_is_one_mark_at_its_average(self):
+        svg = dashboard._price_chart(_bars(11), [(et(11, "09:40") + timedelta(seconds=6), "buy", 19.0, 174.41),
+                                                 (et(11, "09:40") + timedelta(seconds=12), "buy", 38.0, 174.38)])
+        assert svg.count("<polygon") == 1 and "bought 57 at $174.39" in svg
+
+    def test_a_buy_and_a_sell_in_one_bar_stay_two_marks(self):
+        svg = dashboard._price_chart(_bars(11), [(et(11, "10:01"), "buy", 5.0, 100.7), (et(11, "10:03"), "sell", 5.0, 100.8)])
+        assert svg.count("<polygon") == 2
+
+    def test_a_fill_with_no_bar_near_it_is_left_off(self):
+        svg = dashboard._price_chart(_bars(11), [(et(11, "18:20"), "buy", 5.0, 100.7)])
+        assert "<polygon" not in svg and "bought" not in svg
+
+    def test_analyses_are_ticks_along_the_bottom_with_their_rating_on_hover(self):
+        svg = dashboard._price_chart(_bars(11), analyses=[(et(11, "10:35"), "10:35 Overweight", "up")])
+        assert '<g class="up"><rect' in svg and "<title>10:35 Overweight</title>" in svg
+        assert "ticks along the bottom: analyses" in svg and "<polygon" not in svg
+
+    def test_a_single_day_is_labelled_by_the_clock_and_several_by_the_date(self):
+        one = dashboard._price_chart(_bars(11))
+        assert ">09:30</text>" in one and ">12:00</text>" in one and ">15:55</text>" in one and one.count("<path") == 1
+        three = dashboard._price_chart(_bars(11) + _bars(12, base=103.0) + _bars(13, base=101.0))
+        assert all(f">11-{d}</text>" in three for d in (11, 12, 13)) and ">09:30</text>" not in three
+        assert three.count("<path") == 3                 # each day its own line: the night is a step, not a slope
+
+    def test_time_runs_by_bar_so_a_night_takes_almost_no_room(self):
+        svg = dashboard._price_chart(_bars(11) + _bars(12))
+        first, second = re.findall(r'<path d="M([\d.]+),[\d.]+ .*? L([\d.]+),[\d.]+"', svg)
+        day_width, night = float(first[1]) - float(first[0]), float(second[0]) - float(first[1])
+        assert 0 < night < day_width / 20
+
+    def test_a_long_record_is_thinned_but_every_day_keeps_its_last_bar(self):
+        many = [bar for day in (10, 11, 12, 13, 16, 17, 18, 19, 20) for bar in _bars(day, count=140, step=0.01)]
+        svg = dashboard._price_chart(many)
+        points = sum(path.count("L") + 1 for path in re.findall(r'<path d="([^"]+)"', svg))
+        assert points <= 800 and svg.count("<path") == 9
+
+    def test_many_trades_keep_their_hover_text_but_lose_their_labels(self):
+        trades = [(et(11, "09:30") + timedelta(minutes=30 * i), "buy", 1.0 + i, 100.0 + i * 0.5) for i in range(12)]
+        svg = dashboard._price_chart(_bars(11), trades)
+        assert svg.count("<polygon") == 12 and ">+1</text>" not in svg and "bought 1 at $100.00" in svg
+
+    def test_a_flat_price_does_not_divide_by_zero(self):
+        assert "<path" in dashboard._price_chart(_bars(11, step=0.0))
+
+
+@pytest.mark.unit
+class TestTheChartsOnThePages:
+    def _with_bars(self, loop):
+        rows = [{"ticker": "NVDA", "at": timeutil.iso(moment), "open": close, "high": close, "low": close,
+                 "close": close, "volume": 100.0} for moment, close in _bars(11, base=100.0, step=0.05)]
+        rows.append({"ticker": "NVDA", "at": timeutil.iso(et(11, "08:10")), "open": 90.0, "high": 90.0, "low": 90.0,
+                     "close": 90.0, "volume": 5.0})                  # before the open: not part of the session's line
+        loop.store.add_bars(rows)
+
+    def test_the_day_page_draws_the_session_with_the_days_purchase_on_it(self, day):
+        self._with_bars(day)
+        dashboard.build(day.cfg, day.store)
+        section = (day.cfg.dashboard_dir / "day-2026-11-11.html").read_text().split('<section id="NVDA">')[1].split("</section>")[0]
+        assert 'aria-label="NVDA price by five-minute bar on 2026-11-11' in section
+        assert section.count("<polygon") == 1 and "11-11 10:35 bought 98 at" in section
+        assert "90.00" not in section.split("</svg>")[0]              # the pre-market print is not on the axis
+
+    def test_without_bars_the_day_page_keeps_the_line_through_the_ticks(self, day):
+        dashboard.build(day.cfg, day.store)
+        page = (day.cfg.dashboard_dir / "day-2026-11-11.html").read_text()
+        assert 'aria-label="NVDA price at each tick' in page and "<polygon" not in page
+
+    def test_the_overview_has_a_chart_for_each_ticker_with_bars_and_says_what_is_held(self, day):
+        dashboard.build(day.cfg, day.store)
+        assert "with what was bought and sold" not in (day.cfg.dashboard_dir / "index.html").read_text()
+        self._with_bars(day)
+        dashboard.build(day.cfg, day.store)
+        page = (day.cfg.dashboard_dir / "index.html").read_text()
+        section = page.split("Each ticker's price, with what was bought and sold</h2>")[1].split("</section>")[0]
+        assert section.count("<svg") == 1 and '<a href="day-2026-11-11.html#NVDA">NVDA</a>' in section
+        assert "98 held at $" in section and section.count("<polygon") == 1

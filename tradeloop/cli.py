@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 import typer
 from rich.console import Console
 
-from tradeloop import dashboard, secrets, timeutil
+from tradeloop import dashboard, pricebars, secrets, timeutil
 from tradeloop.alpaca import AlpacaClient, AlpacaError, load_credentials
 from tradeloop.analysis import AnalystPool
 from tradeloop.broker import make_broker
@@ -297,6 +297,11 @@ def dashboard_command(config: ConfigOption = None,
     """Build the pages for every day from what the loop has recorded."""
     cfg = _config(config)
     with Store(cfg.db_path) as store:
+        try:    # the charts' prices, brought up to date when the keys and the network allow
+            key, secret = load_credentials()
+            pricebars.update(store, AlpacaClient(key, secret), cfg.tickers, timeutil.utcnow())
+        except Exception as exc:  # noqa: BLE001 - the pages build from what is already stored
+            console.print(f"[yellow]Prices for the charts were not brought up to date ({type(exc).__name__}).[/yellow]")
         index = publish_dashboard(cfg, store, days=None)
     console.print(f"Dashboard: {index}", highlight=False)
     if open_page:

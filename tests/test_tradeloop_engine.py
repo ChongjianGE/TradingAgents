@@ -467,6 +467,32 @@ class TestOutcomes:
 
 
 @pytest.mark.unit
+class TestPricesForTheCharts:
+    def test_each_tick_keeps_the_five_minute_bars_that_have_appeared(self, loop):
+        loop.market.series["NVDA"] = [Bar(et(11, "09:30"), 100.0, 100.4, 99.9, 100.2, 800),
+                                      Bar(et(11, "09:35"), 100.2, 100.6, 100.0, 100.5, 600),
+                                      Bar(et(11, "10:30"), 100.5, 101.0, 100.4, 100.9, 500)]
+        loop.tick("premarket", 11, "08:45")
+        assert loop.store.query("SELECT * FROM bars") == []            # none had printed yet
+        loop.tick("core", 11, "09:35")
+        loop.tick("core", 11, "10:35")
+        kept = loop.store.query("SELECT ticker, close FROM bars ORDER BY at")
+        assert kept == [{"ticker": "NVDA", "close": 100.2}, {"ticker": "NVDA", "close": 100.5},
+                        {"ticker": "NVDA", "close": 100.9}]
+
+    def test_bars_that_cannot_be_fetched_cost_the_tick_nothing_but_a_note(self, loop):
+        def down(symbols, timeframe, start, end):
+            raise AlpacaError(0, "GET /v2/stocks/bars did not reach Alpaca (ConnectionError)")
+
+        loop.tick("core", 11, "09:35")                    # the first tick has no earlier time to ask from
+        loop.market.bars = down
+        report = loop.tick("core", 11, "10:35")
+        assert report.status == "ok"
+        notes = [e["message"] for e in loop.store.query("SELECT message FROM events WHERE source = 'prices'")]
+        assert notes == ["price bars not stored (AlpacaError)"]
+
+
+@pytest.mark.unit
 class TestRunningForever:
     def _run(self, loop, start, ticks):
         loop.clock[0] = start

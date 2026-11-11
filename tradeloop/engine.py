@@ -23,7 +23,7 @@ from datetime import date, datetime, time, timedelta
 from typing import Protocol
 from zoneinfo import ZoneInfo
 
-from tradeloop import context, gate, outcomes, risk, target, timeutil
+from tradeloop import context, gate, outcomes, pricebars, risk, target, timeutil
 from tradeloop.alpaca import Bar, Quote
 from tradeloop.analysis import AnalysisRequest, AnalysisResult
 from tradeloop.broker import Account, Broker
@@ -154,6 +154,11 @@ class Engine:
             outcomes.mark_due(self.store, self.market, now)
         except Exception as exc:  # noqa: BLE001 - marking can wait for the next tick
             self._log("warning", "outcomes", f"outcomes not marked ({type(exc).__name__})", tick)
+
+        try:
+            pricebars.update(self.store, self.market, cfg.tickers, self.now())
+        except Exception as exc:  # noqa: BLE001 - the charts can catch up at the next tick
+            self._log("warning", "prices", f"price bars not stored ({type(exc).__name__})", tick)
 
         report.note = (f"{len(report.analysed)} analysed, {len(report.failed)} failed, "
                        f"{len(self.cfg.tickers) - len(to_run)} reused or skipped, {report.orders} orders")

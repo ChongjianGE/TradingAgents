@@ -7,7 +7,7 @@ from typer.testing import CliRunner
 
 from tests.test_tradeloop_engine import CALENDAR, TICKERS, FakeAnalysts, FakeMarket, et
 from tradeloop import cli
-from tradeloop.alpaca import AlpacaError
+from tradeloop.alpaca import AlpacaError, Bar
 from tradeloop.config import LoopConfig
 from tradeloop.store import Store
 
@@ -50,6 +50,7 @@ def wired(home, monkeypatch):
     analysts = FakeAnalysts(clock)
     real = cli.build_loop
     monkeypatch.setattr(cli, "build_loop", lambda cfg: real(cfg, client=client, analysts=analysts))
+    monkeypatch.setattr(cli, "AlpacaClient", lambda key, secret: client)     # no command reaches the network
     monkeypatch.setattr(cli.timeutil, "utcnow", lambda: clock[0])
     return client, analysts, clock
 
@@ -165,6 +166,30 @@ class TestStatusAndDashboard:
         result = runner.invoke(cli.app, ["dashboard"])
         assert result.exit_code == 0 and "index.html" in result.output
         assert (home / "dashboard" / "day-2026-11-11.html").is_file()
+
+    def test_the_dashboard_command_first_brings_the_charts_prices_up_to_date(self, home, wired):
+        client, _, clock = wired
+        runner.invoke(cli.app, ["tick", "--kind", "premarket"])
+        client.series["NVDA"] = [Bar(et(11, "10:40"), 100.0, 100.5, 99.8, 100.2, 900),
+                                 Bar(et(11, "10:45"), 100.2, 100.9, 100.1, 100.7, 700)]
+        clock[0] = et(11, "10:50")
+        result = runner.invoke(cli.app, ["dashboard"])
+        assert result.exit_code == 0, result.output
+        with Store(home / "tradeloop.db") as store:
+            assert [b["close"] for b in store.query("SELECT close FROM bars WHERE ticker = 'NVDA' ORDER BY at")] == [100.2, 100.7]
+
+    def test_the_dashboard_still_builds_when_the_prices_cannot_be_fetched(self, home, wired):
+        client, _, clock = wired
+        runner.invoke(cli.app, ["tick", "--kind", "premarket"])
+
+        def down(*args, **kwargs):
+            raise AlpacaError(0, "GET /v2/stocks/bars did not reach Alpaca (ConnectionError)")
+
+        client.bars = down
+        clock[0] = et(11, "10:50")
+        result = runner.invoke(cli.app, ["dashboard"])
+        assert result.exit_code == 0 and "not brought up to date (AlpacaError)" in result.output
+        assert (home / "dashboard" / "index.html").is_file()
 
 
 @pytest.mark.unit

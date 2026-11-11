@@ -223,3 +223,20 @@ class TestTheRest:
             list(pool.map(write, range(200)))
         assert store.one("SELECT COUNT(*) AS n FROM analyses WHERE status = 'ok'")["n"] == 200
         assert store.llm_cost_since(T0) == pytest.approx(2.0)
+
+
+@pytest.mark.unit
+class TestPricesForTheCharts:
+    def _bar(self, at, close, ticker="NVDA"):
+        return {"ticker": ticker, "at": at, "open": close, "high": close, "low": close, "close": close, "volume": 10.0}
+
+    def test_bars_come_back_and_the_newest_time_is_known(self, store):
+        assert store.latest_bar_at() is None
+        store.add_bars([self._bar(T0, 100.0), self._bar(T1, 101.0), self._bar(T2, 55.0, "CSCO")])
+        assert store.latest_bar_at() == T2
+        assert [b["close"] for b in store.query("SELECT close FROM bars WHERE ticker = 'NVDA' ORDER BY at")] == [100.0, 101.0]
+
+    def test_a_bar_fetched_again_replaces_the_one_held(self, store):
+        store.add_bars([self._bar(T0, 100.0)])
+        store.add_bars([self._bar(T0, 100.4)])          # it was still forming the first time
+        assert [b["close"] for b in store.query("SELECT close FROM bars")] == [100.4]
