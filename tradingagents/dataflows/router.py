@@ -33,6 +33,7 @@ from tradingagents.dataflows.vendors.yahoo.fundamentals import (
     get_income_statement as get_yfinance_income_statement,
     get_insider_transactions as get_yfinance_insider_transactions,
 )
+from tradingagents.dataflows.vendors.yahoo.intraday import get_intraday_bars
 from tradingagents.dataflows.vendors.yahoo.market import (
     get_stock_stats_indicators_window,
     get_YFin_data_online,
@@ -46,7 +47,8 @@ TOOLS_CATEGORIES = {
     "core_stock_apis": {
         "description": "OHLCV stock price data",
         "tools": [
-            "get_stock_data"
+            "get_stock_data",
+            "get_intraday_data",
         ]
     },
     "technical_indicators": {
@@ -99,6 +101,9 @@ VENDOR_METHODS = {
     "get_stock_data": {
         "alpha_vantage": get_alpha_vantage_stock,
         "yfinance": get_YFin_data_online,
+    },
+    "get_intraday_data": {
+        "yfinance": get_intraday_bars,
     },
     # technical_indicators
     "get_indicators": {

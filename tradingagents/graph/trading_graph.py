@@ -115,7 +115,7 @@ class TradingAgentsGraph:
         self._resuming = False
 
     def resolve_instrument_context(self, ticker: str, asset_type: str = "stock",
-                                   trade_date: str | None = None) -> str:
+                                   trade_date: str | None = None, as_of_time: str | None = None) -> str:
         """Resolve ticker identity once and return the full instrument context.
 
         Deterministic yfinance lookup (cached, fail-open) injected into a
@@ -125,7 +125,7 @@ class TradingAgentsGraph:
         graph regardless of entry point.
         """
         identity = resolve_instrument_identity(ticker)
-        return build_instrument_context(ticker, asset_type, identity, trade_date)
+        return build_instrument_context(ticker, asset_type, identity, trade_date, as_of_time)
 
     def _memory_as_of(self, trade_date) -> str | None:
         """Point-in-time cutoff for past-context lessons (#1251).
@@ -164,7 +164,8 @@ class TradingAgentsGraph:
             f"settings={digest}",
         ])
 
-    def propagate(self, company_name, trade_date, asset_type: str = "stock", portfolio=None):
+    def propagate(self, company_name, trade_date, asset_type: str = "stock", portfolio=None,
+                  as_of_time: str | None = None, session_context: str = ""):
         """Run the trading agents graph for a company on a specific date.
 
         ``asset_type`` selects between the stock pipeline (default) and the
@@ -173,6 +174,10 @@ class TradingAgentsGraph:
         ``checkpoint_enabled`` is set in config, the graph is recompiled with
         a per-ticker SqliteSaver so a crashed run can resume from the last
         successful node on a subsequent invocation with the same ticker+date.
+
+        ``as_of_time`` tells the agents the time of a run made during the day,
+        and ``session_context`` what was already decided and traded this session;
+        both are for a caller that runs more than once a day.
 
         Returns ``(final_state, signal)`` where ``signal`` is one of the 5-tier
         ratings (Buy / Overweight / Hold / Underweight / Sell) or ``"REVIEW"``
@@ -187,6 +192,7 @@ class TradingAgentsGraph:
             return self._run_graph(
                 company_name, trade_date, asset_type=asset_type,
                 checkpoint_thread_id=thread_id_value, portfolio=portfolio,
+                as_of_time=as_of_time, session_context=session_context,
             )
 
     def begin_checkpoint(self, company_name, trade_date, asset_type: str = "stock", portfolio=None) -> str | None:
@@ -290,7 +296,8 @@ class TradingAgentsGraph:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         return Path(self.config["results_dir"]) / "reports" / f"{safe_ticker_component(ticker)}_{stamp}"
 
-    def create_run_state(self, company_name, trade_date, asset_type: str = "stock", portfolio=None):
+    def create_run_state(self, company_name, trade_date, asset_type: str = "stock", portfolio=None,
+                         as_of_time: str | None = None, session_context: str = ""):
         """Build a run's initial state; propagate() and the CLI both start here.
 
         Injects the resolved instrument identity for every agent (#814). The
@@ -298,12 +305,16 @@ class TradingAgentsGraph:
         and loads them alongside the analysts (see ``_memory_step``).
         """
         trade_date = _validate_trade_date(trade_date)
+        # The time is passed only when there is one, so a resolver written for
+        # the three arguments it used to take keeps working.
+        timed = {"as_of_time": as_of_time} if as_of_time else {}
         return self.propagator.create_initial_state(
             company_name,
             trade_date,
             asset_type=asset_type,
-            instrument_context=self.resolve_instrument_context(company_name, asset_type, trade_date),
+            instrument_context=self.resolve_instrument_context(company_name, asset_type, trade_date, **timed),
             portfolio_context=portfolio.render(company_name) if portfolio is not None else "",
+            session_context=session_context or "",
         )
 
     def _memory_step(self, state):
@@ -371,9 +382,11 @@ class TradingAgentsGraph:
         )
 
     def _run_graph(self, company_name, trade_date, asset_type: str = "stock",
-                   checkpoint_thread_id: str | None = None, portfolio=None):
+                   checkpoint_thread_id: str | None = None, portfolio=None,
+                   as_of_time: str | None = None, session_context: str = ""):
         """Execute the graph and write the resulting state to disk and memory log."""
-        init_agent_state = self.create_run_state(company_name, trade_date, asset_type, portfolio)
+        init_agent_state = self.create_run_state(company_name, trade_date, asset_type, portfolio,
+                                                 as_of_time, session_context)
         args = self.propagator.get_graph_args()
 
         # Inject the checkpoint thread_id (from checkpoint_scope) so the same
@@ -462,6 +475,7 @@ class TradingAgentsGraph:
             "investment_plan": final_state["investment_plan"],
             "final_trade_decision": final_state["final_trade_decision"],
             "final_rating": run_rating(final_state),
+            "final_decision": final_state.get("final_decision") or None,
             "run_settings": self.run_settings(),
         }
 

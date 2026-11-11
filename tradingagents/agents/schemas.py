@@ -58,6 +58,32 @@ def _coerce_optional_float(value):
         return None
 
 
+def _coerce_weight(value):
+    """Normalise an LLM-written position weight to a fraction between 0 and 1, or None.
+
+    A model asked for a fraction also writes "30%" or 30. Both can only mean
+    three tenths, so they are read as that; a placeholder, a negative number or
+    anything past 100 is dropped rather than failing the whole decision.
+    """
+    percent = False
+    if isinstance(value, str):
+        text = value.strip()
+        if text.lower() in _NULLISH_FLOAT:
+            return None
+        percent = text.endswith("%")
+        try:
+            value = float(text.rstrip("%").strip())
+        except ValueError:
+            return None
+    if value is None or isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    if value != value or value < 0:      # NaN, or a negative weight
+        return None
+    if percent or value > 1:
+        value = value / 100
+    return float(value) if value <= 1 else None
+
+
 # ---------------------------------------------------------------------------
 # Shared rating types
 # ---------------------------------------------------------------------------
@@ -258,11 +284,33 @@ class PortfolioDecision(BaseModel):
         default=None,
         description="Optional recommended holding period, e.g. '3-6 months'.",
     )
+    target_weight: float | None = Field(
+        default=None,
+        description=(
+            "Optional. The position to hold after this decision, as a fraction of "
+            "a full position: 0 is no position, 1 is a full position, 0.3 is three "
+            "tenths of one. A number between 0 and 1, consistent with the rating. "
+            "Omit it if you cannot state one."
+        ),
+    )
+    stop_loss: float | None = Field(
+        default=None,
+        description=(
+            "Optional stop-loss as an absolute price in the instrument's quote "
+            "currency (e.g. 151.5), never a percentage: the price at or under which "
+            "the position should be closed. Omit it if you cannot state a level."
+        ),
+    )
 
-    @field_validator("price_target", mode="before")
+    @field_validator("price_target", "stop_loss", mode="before")
     @classmethod
     def _nullish_float_to_none(cls, v):
         return _coerce_optional_float(v)
+
+    @field_validator("target_weight", mode="before")
+    @classmethod
+    def _weight_as_a_fraction(cls, v):
+        return _coerce_weight(v)
 
 
 def render_pm_decision(decision: PortfolioDecision) -> str:
@@ -285,6 +333,10 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
     target = decision.price_target if decision.price_target is not None else "not provided"
     parts.extend(["", f"**Price Target**: {target}"])
     parts.extend(["", f"**Time Horizon**: {decision.time_horizon or 'not provided'}"])
+    weight = f"{decision.target_weight:g}" if decision.target_weight is not None else "not provided"
+    parts.extend(["", f"**Target Weight**: {weight}"])
+    stop = decision.stop_loss if decision.stop_loss is not None else "not provided"
+    parts.extend(["", f"**Stop Loss**: {stop}"])
     return "\n".join(parts)
 
 

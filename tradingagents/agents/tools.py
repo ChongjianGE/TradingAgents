@@ -9,7 +9,7 @@ from typing import Annotated, Literal
 from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
-from tradingagents.dataflows.date_window import as_of, as_of_window
+from tradingagents.dataflows.date_window import as_of, as_of_window, get_current_date
 from tradingagents.dataflows.errors import NoMarketDataError, VendorUnavailableError
 from tradingagents.dataflows.router import no_data_available, route_to_vendor, vendor_unavailable
 from tradingagents.dataflows.vendors.yahoo.snapshot import build_verified_market_snapshot
@@ -36,6 +36,31 @@ def get_stock_data(
     except ValueError as e:
         return str(e)
     return route_to_vendor("get_stock_data", symbol, start_date, end_date)
+
+
+@tool
+def get_intraday_data(
+    symbol: Annotated[str, InjectedState("company_of_interest")],
+    interval: Annotated[Literal["5m", "15m", "30m", "60m"], "bar size"] = "30m",
+    look_back_days: Annotated[int, "calendar days of bars to include, 1 to 10"] = 3,
+    trade_date: Annotated[str, InjectedState("trade_date")] = "",
+) -> str:
+    """
+    Retrieve intraday price bars (OHLCV) for the instrument under analysis, up to
+    the current time, including pre-market and after-hours trading. Use it to see
+    how the price moved inside the day: the open, the session so far, and any move
+    on overnight news. Daily tools show the current day only as one unfinished bar.
+    Args:
+        interval (str): Bar size: 5m, 15m, 30m or 60m (default 30m)
+        look_back_days (int): Calendar days of bars to include, 1 to 10 (default 3)
+    Returns:
+        str: A table of intraday bars with their session (pre-market, regular, after-hours).
+    """
+    try:
+        return route_to_vendor("get_intraday_data", symbol, interval, look_back_days,
+                               trade_date or get_current_date())
+    except ValueError as e:
+        return str(e)
 
 
 @tool

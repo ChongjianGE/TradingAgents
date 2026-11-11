@@ -109,6 +109,7 @@ def build_instrument_context(
     asset_type: str = "stock",
     identity: Mapping[str, str] | None = None,
     trade_date: str | None = None,
+    as_of_time: str | None = None,
 ) -> str:
     """Describe the exact instrument so agents preserve identity and ticker.
 
@@ -166,6 +167,13 @@ def build_instrument_context(
             " Treat it as a crypto asset rather than a company, and do not "
             "assume company fundamentals are available."
         )
+    if as_of_time:
+        # A run made during the day: without the time, the agents read the
+        # unfinished daily bar as a close and "today" as a whole day.
+        context += (
+            f" The current time is {as_of_time}. Today's daily bar is still forming"
+            " until the close, so read it as the session so far, not as a full day."
+        )
     return context
 
 
@@ -209,10 +217,15 @@ def get_portfolio_context_from_state(state: Mapping[str, Any]) -> str:
     an account we were never told about.
     """
     context = state.get("portfolio_context")
-    if isinstance(context, str) and context.strip():
-        return context
-    return (
-        "Portfolio context: not provided. You do not know the caller's current "
-        "holdings or cash, so do not assume a flat book; give direction and "
-        "sizing guidance in terms the caller can apply to their own position."
-    )
+    if not (isinstance(context, str) and context.strip()):
+        context = (
+            "Portfolio context: not provided. You do not know the caller's current "
+            "holdings or cash, so do not assume a flat book; give direction and "
+            "sizing guidance in terms the caller can apply to their own position."
+        )
+    # What was already decided and traded this session, when the caller says:
+    # an agent that cannot see its own decision of an hour ago reverses it freely.
+    session = state.get("session_context")
+    if isinstance(session, str) and session.strip():
+        context = f"{context}\n\n{session.strip()}"
+    return context
