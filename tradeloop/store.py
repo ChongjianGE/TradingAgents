@@ -105,12 +105,12 @@ CREATE TABLE IF NOT EXISTS fills (
     fee_usd REAL NOT NULL DEFAULT 0, cost_usd REAL NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS fills_time ON fills (at);
-CREATE TABLE IF NOT EXISTS bars (       -- five-minute prices, kept for the charts
-    ticker TEXT NOT NULL, at TEXT NOT NULL,
-    open REAL, high REAL, low REAL, close REAL NOT NULL, volume REAL,
-    PRIMARY KEY (ticker, at)
+CREATE TABLE IF NOT EXISTS price_bars (  -- one-minute and daily prices, kept for the charts
+    ticker TEXT NOT NULL, timeframe TEXT NOT NULL, at TEXT NOT NULL,
+    open REAL NOT NULL, high REAL NOT NULL, low REAL NOT NULL, close REAL NOT NULL, volume REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (ticker, timeframe, at)
 );
-CREATE INDEX IF NOT EXISTS bars_at ON bars (at);
+CREATE INDEX IF NOT EXISTS price_bars_time ON price_bars (timeframe, at);
 CREATE TABLE IF NOT EXISTS outcomes (   -- how the price moved after each decision
     run_id TEXT NOT NULL REFERENCES analyses, horizon TEXT NOT NULL,
     due_at TEXT NOT NULL, price REAL, ret REAL, marked_at TEXT,
@@ -319,12 +319,17 @@ class Store:
 
     # --- prices for the charts
     def add_bars(self, rows: list[dict]) -> None:
-        """Keep bars; one already held is replaced, since the newest bar of a fetch may not have been complete."""
-        self._insert("bars", rows, conflict="OR REPLACE")
+        """Keep bars; one already held is replaced, since a bar fetched early may not have been final."""
+        self._insert("price_bars", rows, conflict="OR REPLACE")
 
-    def latest_bar_at(self) -> str | None:
-        """The time of the newest bar held for any ticker."""
-        return self.one("SELECT MAX(at) AS at FROM bars")["at"]
+    def latest_bar_at(self, timeframe: str) -> str | None:
+        """The time of the newest bar of ``timeframe`` held for any ticker."""
+        return self.one("SELECT MAX(at) AS at FROM price_bars WHERE timeframe = ?", (timeframe,))["at"]
+
+    def bars(self, timeframe: str, since: str = "") -> list[dict]:
+        """Every bar of ``timeframe`` from ``since`` on, by ticker and then by time."""
+        return self.query("SELECT ticker, at, open, high, low, close, volume FROM price_bars "
+                          "WHERE timeframe = ? AND at >= ? ORDER BY ticker, at", (timeframe, since))
 
     # --- outcomes
     def add_outcomes(self, rows: list[dict]) -> None:

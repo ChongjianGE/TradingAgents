@@ -168,8 +168,13 @@ class AlpacaClient:
                                        float(previous) if previous else None)
         return quotes
 
-    def bars(self, symbols: Iterable[str], timeframe: str, start: datetime, end: datetime) -> dict[str, list[Bar]]:
-        """Bars per symbol from ``start`` to ``end``, oldest first, following every page."""
+    def bars(self, symbols: Iterable[str], timeframe: str, start: datetime, end: datetime,
+             feed: str | None = None) -> dict[str, list[Bar]]:
+        """Bars per symbol from ``start`` to ``end``, oldest first, following every page.
+
+        ``feed`` names another feed than the client's own for this one request:
+        "sip" is every exchange, which a free plan may read once it is 15 minutes old.
+        """
         symbols = list(symbols)
         out: dict[str, list[Bar]] = {symbol: [] for symbol in symbols}
         if not symbols:
@@ -177,7 +182,7 @@ class AlpacaClient:
         token = None
         while True:
             payload = self._data("/v2/stocks/bars", symbols=",".join(symbols), timeframe=timeframe,
-                                 start=timeutil.iso(start), end=timeutil.iso(end), feed=self.feed,
+                                 start=timeutil.iso(start), end=timeutil.iso(end), feed=feed or self.feed,
                                  limit=10000, adjustment="raw", sort="asc", page_token=token) or {}
             for symbol, rows in (payload.get("bars") or {}).items():
                 out.setdefault(symbol, []).extend(

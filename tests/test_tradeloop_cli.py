@@ -176,7 +176,7 @@ class TestStatusAndDashboard:
         result = runner.invoke(cli.app, ["dashboard"])
         assert result.exit_code == 0, result.output
         with Store(home / "tradeloop.db") as store:
-            assert [b["close"] for b in store.query("SELECT close FROM bars WHERE ticker = 'NVDA' ORDER BY at")] == [100.2, 100.7]
+            assert [b["close"] for b in store.bars("1Min")] == [100.2, 100.7]
 
     def test_the_dashboard_still_builds_when_the_prices_cannot_be_fetched(self, home, wired):
         client, _, clock = wired

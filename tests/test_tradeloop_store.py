@@ -227,16 +227,20 @@ class TestTheRest:
 
 @pytest.mark.unit
 class TestPricesForTheCharts:
-    def _bar(self, at, close, ticker="NVDA"):
-        return {"ticker": ticker, "at": at, "open": close, "high": close, "low": close, "close": close, "volume": 10.0}
+    def _bar(self, at, close, ticker="NVDA", timeframe="1Min"):
+        return {"ticker": ticker, "timeframe": timeframe, "at": at, "open": close, "high": close, "low": close,
+                "close": close, "volume": 10.0}
 
-    def test_bars_come_back_and_the_newest_time_is_known(self, store):
-        assert store.latest_bar_at() is None
-        store.add_bars([self._bar(T0, 100.0), self._bar(T1, 101.0), self._bar(T2, 55.0, "CSCO")])
-        assert store.latest_bar_at() == T2
-        assert [b["close"] for b in store.query("SELECT close FROM bars WHERE ticker = 'NVDA' ORDER BY at")] == [100.0, 101.0]
+    def test_bars_come_back_by_timeframe_and_the_newest_of_each_is_known(self, store):
+        assert store.latest_bar_at("1Min") is None
+        store.add_bars([self._bar(T0, 100.0), self._bar(T1, 101.0), self._bar(T2, 55.0, "CSCO"),
+                        self._bar("2026-11-10T05:00:00Z", 99.0, timeframe="1Day")])
+        assert store.latest_bar_at("1Min") == T2 and store.latest_bar_at("1Day") == "2026-11-10T05:00:00Z"
+        assert [(b["ticker"], b["close"]) for b in store.bars("1Min")] == [("CSCO", 55.0), ("NVDA", 100.0), ("NVDA", 101.0)]
+        assert [b["close"] for b in store.bars("1Min", since=T1)] == [55.0, 101.0]
+        assert [b["close"] for b in store.bars("1Day")] == [99.0]
 
     def test_a_bar_fetched_again_replaces_the_one_held(self, store):
         store.add_bars([self._bar(T0, 100.0)])
-        store.add_bars([self._bar(T0, 100.4)])          # it was still forming the first time
-        assert [b["close"] for b in store.query("SELECT close FROM bars")] == [100.4]
+        store.add_bars([self._bar(T0, 100.4)])          # every exchange's bar, in place of one exchange's
+        assert [b["close"] for b in store.bars("1Min")] == [100.4]

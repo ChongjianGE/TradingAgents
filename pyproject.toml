@@ -55,6 +55,7 @@ include = ["tradingagents*", "cli*", "tradeloop*"]
 [tool.setuptools.package-data]
 cli = ["static/*"]
 tradingagents = ["assets/*.svg"]
+tradeloop = ["assets/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

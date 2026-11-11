@@ -31,7 +31,8 @@ class FakeMarket:
     def __init__(self):
         self.prices = dict.fromkeys(TICKERS, 100.0)
         self.headlines: dict[str, list[datetime]] = {}
-        self.series: dict[str, list[Bar]] = {}
+        self.series: dict[str, list[Bar]] = {}       # intraday bars
+        self.days: dict[str, list[Bar]] = {}         # daily bars
         self.down = False
         self.quote_calls = 0
 
@@ -45,7 +46,9 @@ class FakeMarket:
         return [{"id": i, "at": at, "headline": "h", "symbols": list(symbols)}
                 for i, at in enumerate(self.headlines.get(symbols[0], [])) if start is None or at > start]
 
-    def bars(self, symbols, timeframe, start, end):
+    def bars(self, symbols, timeframe, start, end, feed=None):
+        if timeframe == "1Day":
+            return {s: [b for b in self.days.get(s, []) if start <= b.at <= end] for s in symbols}
         return {s: [b for b in self.series.get(s, []) if start <= b.at <= end] for s in symbols}
 
 
@@ -468,25 +471,23 @@ class TestOutcomes:
 
 @pytest.mark.unit
 class TestPricesForTheCharts:
-    def test_each_tick_keeps_the_five_minute_bars_that_have_appeared(self, loop):
+    def test_each_tick_keeps_the_bars_that_have_appeared(self, loop):
         loop.market.series["NVDA"] = [Bar(et(11, "09:30"), 100.0, 100.4, 99.9, 100.2, 800),
-                                      Bar(et(11, "09:35"), 100.2, 100.6, 100.0, 100.5, 600),
+                                      Bar(et(11, "09:31"), 100.2, 100.6, 100.0, 100.5, 600),
                                       Bar(et(11, "10:30"), 100.5, 101.0, 100.4, 100.9, 500)]
-        loop.tick("premarket", 11, "08:45")
-        assert loop.store.query("SELECT * FROM bars") == []            # none had printed yet
+        loop.market.days["NVDA"] = [Bar(et(10, "00:00"), 98.0, 99.5, 97.5, 99.0, 9_000_000)]
         loop.tick("core", 11, "09:35")
         loop.tick("core", 11, "10:35")
-        kept = loop.store.query("SELECT ticker, close FROM bars ORDER BY at")
-        assert kept == [{"ticker": "NVDA", "close": 100.2}, {"ticker": "NVDA", "close": 100.5},
-                        {"ticker": "NVDA", "close": 100.9}]
+        kept = loop.store.query("SELECT timeframe, close FROM price_bars WHERE ticker = 'NVDA' ORDER BY timeframe, at")
+        assert kept == [{"timeframe": "1Day", "close": 99.0}, {"timeframe": "1Min", "close": 100.2},
+                        {"timeframe": "1Min", "close": 100.5}, {"timeframe": "1Min", "close": 100.9}]
 
     def test_bars_that_cannot_be_fetched_cost_the_tick_nothing_but_a_note(self, loop):
-        def down(symbols, timeframe, start, end):
+        def down(symbols, timeframe, start, end, feed=None):
             raise AlpacaError(0, "GET /v2/stocks/bars did not reach Alpaca (ConnectionError)")
 
-        loop.tick("core", 11, "09:35")                    # the first tick has no earlier time to ask from
         loop.market.bars = down
-        report = loop.tick("core", 11, "10:35")
+        report = loop.tick("core", 11, "09:35")
         assert report.status == "ok"
         notes = [e["message"] for e in loop.store.query("SELECT message FROM events WHERE source = 'prices'")]
         assert notes == ["price bars not stored (AlpacaError)"]
