@@ -146,9 +146,37 @@ class TestTheOverview:
     def test_positions_and_each_tickers_latest_decision_are_listed(self, day):
         dashboard.build(day.cfg, day.store)
         page = (day.cfg.dashboard_dir / "index.html").read_text()
-        assert "<td class=\"\">NVDA</td><td class=\"num\">98</td>" in page
+        assert '>chart ↗</a></td><td class="num">98</td>' in page and '<td class="">NVDA<a class="out"' in page
         assert '<span class="pill level">Hold</span>' in page             # NVDA's post-close analysis
         assert 'title="11-11 08:45 Buy"' in page and "<svg" in page       # the rating strip and the equity chart
+
+    def test_each_ticker_opens_its_record_of_the_latest_day_and_links_out_to_a_chart(self, day):
+        dashboard.build(day.cfg, day.store)
+        page = (day.cfg.dashboard_dir / "index.html").read_text()
+        assert '<a href="day-2026-11-11.html#NVDA"><b>NVDA</b></a>' in page
+        out = ('<a class="out" href="https://finance.yahoo.com/quote/NVDA" target="_blank" rel="noopener noreferrer" '
+               'title="Price chart of NVDA, on another site">chart ↗</a>')
+        assert page.count(out) == 2                     # beside the position and beside the decisions
+        assert page.count('class="out"') == 1 + len(day.cfg.tickers)
+        day_page = (day.cfg.dashboard_dir / "day-2026-11-11.html").read_text()
+        assert f'<section id="NVDA"><h2>NVDA{out}</h2>' in day_page
+
+    def test_the_chart_site_is_the_configs_and_the_symbol_is_made_safe_for_an_address(self, tmp_path):
+        loop = _a_day(tmp_path, chart_url="https://charts.example/s?sym={ticker}&range=1d")
+        loop.cfg.tickers.append("BRK/B")                  # no real ticker has a slash; an address must survive one
+        dashboard.build(loop.cfg, loop.store)
+        page = (loop.cfg.dashboard_dir / "index.html").read_text()
+        assert 'href="https://charts.example/s?sym=NVDA&amp;range=1d"' in page
+        assert 'href="https://charts.example/s?sym=BRK%2FB&amp;range=1d"' in page
+        loop.store.close()
+
+    def test_no_chart_site_means_no_link_out(self, tmp_path):
+        loop = _a_day(tmp_path, chart_url="")
+        dashboard.build(loop.cfg, loop.store)
+        for name in ("index.html", "day-2026-11-11.html"):
+            assert 'class="out"' not in (loop.cfg.dashboard_dir / name).read_text().split("</style>")[1]
+        assert '<a href="day-2026-11-11.html#NVDA"><b>NVDA</b></a>' in (loop.cfg.dashboard_dir / "index.html").read_text()
+        loop.store.close()
 
     def test_outcomes_are_grouped_by_rating_with_how_often_the_move_went_its_way(self, day):
         dashboard.build(day.cfg, day.store)

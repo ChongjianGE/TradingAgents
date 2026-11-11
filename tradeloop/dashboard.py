@@ -15,6 +15,7 @@ from collections import defaultdict
 from datetime import datetime
 from html import escape
 from pathlib import Path
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 from markdown_it import MarkdownIt
@@ -74,6 +75,7 @@ pre { margin:0; padding:10px 12px; background:var(--panel); border-radius:8px; o
 svg { display:block; width:100%; height:auto; } .chart { background:var(--surface); border-radius:10px; padding:8px; }
 .strip { display:flex; flex-wrap:wrap; gap:3px; } .strip i { width:13px; height:13px; border-radius:3px; background:currentColor; display:block; }
 ul.checks { margin:0; padding-left:18px; } nav.tickers { display:flex; flex-wrap:wrap; gap:8px 16px; }
+a.out { font-size:.8em; font-weight:400; margin-left:.5em; white-space:nowrap; }
 """
 
 
@@ -255,6 +257,15 @@ def _outcome_table(data: _Data) -> str:
     return _table(["Rating", "After 60 min", "At the next close", "1 trading day on", "5 trading days on"], rows)
 
 
+def _chart_link(cfg: LoopConfig, ticker: str) -> str:
+    """A link out to a price chart of ``ticker``, when the config names a site for one."""
+    if not cfg.chart_url:
+        return ""
+    url = cfg.chart_url.replace("{ticker}", quote(ticker, safe=""))
+    return (f'<a class="out" href="{escape(url)}" target="_blank" rel="noopener noreferrer" '
+            f'title="Price chart of {escape(ticker)}, on another site">chart ↗</a>')
+
+
 def _index(data: _Data) -> str:
     cfg, parts = data.cfg, []
     stats = [_day_stats(data, day) for day in data.days]
@@ -280,7 +291,8 @@ def _index(data: _Data) -> str:
                  + "</section>")
 
     if last:
-        rows = [[escape(p["ticker"]), f"{p['qty']:g}", _money(p["avg_price"]), _money(p.get("price")),
+        rows = [[escape(p["ticker"]) + _chart_link(cfg, p["ticker"]), f"{p['qty']:g}", _money(p["avg_price"]),
+                 _money(p.get("price")),
                  _signed(None if p.get("price") is None else (p["price"] - p["avg_price"]) * p["qty"])]
                 for p in last["positions"]]
         parts.append("<section><h2>Positions now</h2>"
@@ -296,7 +308,10 @@ def _index(data: _Data) -> str:
                         for a in runs[-60:])
         latest = runs[-1] if runs else None
         flips = sum(1 for a, b in zip(runs, runs[1:], strict=False) if a["rating"] != b["rating"])
-        rows.append([f"<b>{escape(ticker)}</b>", _rating(latest["rating"]) if latest else "–",
+        # The name opens the ticker's own record of the latest day; the chart is someone else's page.
+        name = (f'<a href="day-{data.days[-1]}.html#{escape(ticker)}"><b>{escape(ticker)}</b></a>' if data.days
+                else f"<b>{escape(ticker)}</b>")
+        rows.append([name + _chart_link(cfg, ticker), _rating(latest["rating"]) if latest else "–",
                      "–" if not latest or latest["target_weight"] is None else f"{latest['target_weight']:g}",
                      "–" if not latest or latest["stop_loss"] is None else f"{latest['stop_loss']:g}",
                      str(len(runs)), str(flips), f'<div class="strip">{strip}</div>'])
@@ -455,7 +470,7 @@ def _day(data: _Data, day: str) -> str:
                 "<br>".join(f'{escape(x["side"])} {x["qty"]:g} {escape(x["type"])} · {escape(x["status"])}'
                             for x in orders) or "–",
             ])
-        section = [f'<section id="{escape(ticker)}"><h2>{escape(ticker)}</h2>',
+        section = [f'<section id="{escape(ticker)}"><h2>{escape(ticker)}{_chart_link(cfg, ticker)}</h2>',
                    _line_chart(points, marks, label=f"{ticker} price at each tick, with the day's analyses marked"),
                    _table(["Time", "Tick", "Price", "Shares held", "Gate", "Ruling", "Orders"], rows, (2, 3))]
         if fills:

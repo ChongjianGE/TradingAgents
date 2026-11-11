@@ -92,6 +92,17 @@ class LoopConfig(BaseModel):
     # A command run after the dashboard is built, as a list of arguments with
     # "{dir}" standing for the dashboard folder: to copy the pages somewhere.
     after_dashboard: list[str] = Field(default_factory=list)
+    # A page that charts a ticker's price, linked beside each ticker on the
+    # dashboard, with "{ticker}" standing for the symbol. Empty for no link.
+    chart_url: str = "https://finance.yahoo.com/quote/{ticker}"
+
+    @field_validator("chart_url")
+    @classmethod
+    def _chart_url(cls, value: str) -> str:
+        value = value.strip()
+        if value and not (value.startswith(("https://", "http://")) and "{ticker}" in value):
+            raise ValueError('chart_url must be an http(s) address with "{ticker}" in it, or empty')
+        return value
 
     @field_validator("tickers")
     @classmethod
@@ -209,6 +220,8 @@ daily_llm_budget_usd = 60.0
 
 # A command run after the dashboard is built; "{dir}" is the dashboard folder.
 # after_dashboard = ["rclone", "copy", "{dir}", "remote:bucket/tradeloop"]
+# The page each ticker on the dashboard links to for a price chart; "" for none.
+# chart_url = "https://finance.yahoo.com/quote/{ticker}"
 
 # The fraction of a full position each rating stands for; "keep" changes nothing.
 [rating_weights]

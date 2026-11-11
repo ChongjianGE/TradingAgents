@@ -120,3 +120,17 @@ class TestTimes:
     def test_a_time_survives_the_round_trip(self):
         moment = datetime(2026, 11, 11, 15, 35, tzinfo=UTC)
         assert timeutil.parse(timeutil.iso(moment)) == moment
+
+
+@pytest.mark.unit
+class TestTheChartSite:
+    def test_it_defaults_to_a_quote_page_and_can_be_changed_or_turned_off(self):
+        assert LoopConfig().chart_url == "https://finance.yahoo.com/quote/{ticker}"
+        assert LoopConfig(chart_url=" https://charts.example/{ticker} ").chart_url == "https://charts.example/{ticker}"
+        assert LoopConfig(chart_url="").chart_url == ""
+
+    @pytest.mark.parametrize("value", ["finance.yahoo.com/quote/{ticker}", "https://finance.yahoo.com/quote/NVDA",
+                                       "javascript:alert('{ticker}')"])
+    def test_anything_but_a_web_address_with_the_ticker_in_it_is_refused(self, value):
+        with pytest.raises(ValueError, match="chart_url"):
+            LoopConfig(chart_url=value)
