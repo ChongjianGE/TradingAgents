@@ -170,6 +170,12 @@ class TestTheAlpacaBroker:
         assert client.sent == [{"symbol": "NVDA", "side": "buy", "qty": "12", "type": "limit",
                                 "time_in_force": "day", "client_order_id": "tl-1-NVDA-buy", "limit_price": "169.2"}]
 
+    def test_the_fill_time_is_read_when_the_broker_gives_one(self):
+        found = {"id": "o-9", "status": "filled", "filled_qty": "12", "filled_avg_price": "169.11",
+                 "filled_at": "2026-11-11T14:35:02.123456789Z"}
+        state = AlpacaBroker(_FakeClient(existing={"c1": found})).refresh({"client_order_id": "c1"}, None, NOW)
+        assert state.filled_at == datetime(2026, 11, 11, 14, 35, 2, 123456, tzinfo=UTC)
+
     def test_an_order_already_at_the_broker_is_not_sent_again(self):
         found = {"id": "o-9", "status": "filled", "filled_qty": "12", "filled_avg_price": "169.11"}
         client = _FakeClient(existing={"tl-1-NVDA-buy": found})

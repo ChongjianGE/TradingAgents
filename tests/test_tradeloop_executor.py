@@ -188,6 +188,27 @@ class TestSettlingOpenOrders:
         assert fills[1]["price"] == pytest.approx(100.10)        # (200 × 100.06 − 80 × 100) / 120
         assert store.order(row["client_order_id"])["status"] == "filled"
 
+    def test_a_fill_is_timed_by_the_broker_when_it_says_when(self, store):
+        filled_at = datetime(2026, 11, 11, 15, 35, 2, tzinfo=UTC)
+
+        class Timed:
+            name = "alpaca_paper"
+
+            def submit(self, order, price, at):
+                return OrderState("filled", 200.0, 100.02, "o1", filled_at=filled_at)
+
+        tick_id = tick(store)
+        Executor(Timed(), store, CFG).place(plan_orders([ruling()], tick_id, CFG), {"NVDA": 100.0},
+                                            NOW + timedelta(minutes=7), tick_id)
+        (fill,) = store.query("SELECT at FROM fills")
+        assert fill["at"] == "2026-11-11T15:35:02Z"            # not the time the tick looked
+
+
+def OrderRequestFor(ticker, side, qty):  # noqa: N802 - reads as a constructor at the call site
+    from tradeloop.broker import OrderRequest
+
+    return OrderRequest(ticker=ticker, side=side, qty=qty, type="market", client_order_id=f"direct-{side}-{qty:g}")
+
 
 def held(qty=200.0):
     return Account(equity=100_000.0, cash=80_000.0, positions={"NVDA": Position("NVDA", qty, 100.03)})
@@ -241,6 +262,41 @@ class TestProtectiveStops:
         assert broker.account({}).positions == {}
         (fill,) = store.query("SELECT * FROM fills WHERE side = 'sell'")
         assert fill["qty"] == 200.0 and fill["price"] == pytest.approx(91.0 * (1 - 0.0003))
+
+    def test_adding_to_a_position_takes_its_stop_off_first_and_puts_a_larger_one_back(self, store):
+        """A broker refuses a buy that could trade against one's own resting stop."""
+        broker, executor, tick_id = self._bought(store)
+        executor.sync_stops(held(), {"NVDA": 92.0}, {"NVDA": 100.0}, NOW, tick_id)
+        later = tick(store, "20261111T1135-core")
+        order_log = []
+        real_submit, real_cancel = broker.submit, broker.cancel
+        broker.submit = lambda o, p, a: order_log.append(("submit", o.type)) or real_submit(o, p, a)
+        broker.cancel = lambda row: order_log.append(("cancel", row["type"])) or real_cancel(row)
+
+        executor.place(plan_orders([ruling(current=200.0, target_qty=300.0)], later, CFG), {"NVDA": 100.0}, NOW, later)
+        executor.sync_stops(broker.account({"NVDA": 100.0}), {"NVDA": 92.0}, {"NVDA": 100.0}, NOW, later)
+        assert order_log == [("cancel", "stop"), ("submit", "limit"), ("submit", "stop")]
+        (stop,) = [o for o in store.open_orders("simulate") if o["type"] == "stop"]
+        assert stop["qty"] == 300.0
+
+    def test_a_sell_is_cut_to_what_is_still_held(self, store):
+        """A stop can sell the shares while an analysis runs; the sell planned before must not go short."""
+        broker, executor, tick_id = self._bought(store)                # 200 held
+        later = tick(store, "20261111T1135-core")
+        broker.submit(OrderRequestFor("NVDA", "sell", 150.0), 100.0, NOW)     # 50 left, behind the planner's back
+        (row,) = executor.place(plan_orders([ruling(current=200.0, target_qty=0.0, verdict="reduce")], later, CFG),
+                                {"NVDA": 100.0}, NOW, later)
+        assert (row["qty"], row["status"]) == (50.0, "filled") and broker.account({}).positions == {}
+
+    def test_a_sell_of_shares_already_gone_is_dropped_and_logged(self, store):
+        broker, executor, tick_id = self._bought(store)
+        later = tick(store, "20261111T1135-core")
+        broker.submit(OrderRequestFor("NVDA", "sell", 200.0), 100.0, NOW)
+        placed = executor.place(plan_orders([ruling(current=200.0, target_qty=0.0, verdict="reduce")], later, CFG),
+                                {"NVDA": 100.0}, NOW, later)
+        assert placed == [] and store.query("SELECT * FROM orders WHERE tick_id = ?", (later,)) == []
+        (event,) = store.query("SELECT * FROM events")
+        assert "sell of 200 NVDA dropped: 0 held now" in event["message"]
 
     def test_selling_cancels_the_stop_that_holds_the_shares(self, store):
         broker, executor, tick_id = self._bought(store)

@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
 
+from tradeloop import timeutil
 from tradeloop.alpaca import AlpacaClient, AlpacaError
 from tradeloop.config import LoopConfig
 from tradeloop.store import Store
@@ -59,6 +60,7 @@ class OrderState:
     broker_order_id: str | None = None
     fee_usd: float = 0.0
     error: str | None = None
+    filled_at: datetime | None = None   # when the broker says it filled, when it says
 
     @property
     def is_open(self) -> bool:
@@ -80,9 +82,10 @@ class Broker(Protocol):
 
 
 def _state(payload: dict) -> OrderState:
-    price = payload.get("filled_avg_price")
+    price, filled_at = payload.get("filled_avg_price"), payload.get("filled_at")
     return OrderState(status=payload.get("status", "new"), filled_qty=float(payload.get("filled_qty") or 0),
-                      filled_avg_price=float(price) if price else None, broker_order_id=payload.get("id"))
+                      filled_avg_price=float(price) if price else None, broker_order_id=payload.get("id"),
+                      filled_at=timeutil.parse(filled_at) if filled_at else None)
 
 
 class AlpacaBroker:

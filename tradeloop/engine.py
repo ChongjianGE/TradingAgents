@@ -15,6 +15,7 @@ whole is recorded as failed and the loop goes on to the next one.
 from __future__ import annotations
 
 import logging
+import time as time_module
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
@@ -28,7 +29,7 @@ from tradeloop.broker import Account, Broker
 from tradeloop.config import LoopConfig
 from tradeloop.executor import Executor, plan_orders
 from tradeloop.schedule import Scheduler, Session, Tick
-from tradeloop.store import Store
+from tradeloop.store import OPEN_ORDER_STATUSES, Store
 
 logger = logging.getLogger(__name__)
 
@@ -57,12 +58,13 @@ class Engine:
     def __init__(self, cfg: LoopConfig, store: Store, broker: Broker, market: Market, analysts: Analysts,
                  scheduler: Scheduler, *, now: Callable[[], datetime] = timeutil.utcnow,
                  today: Callable[[], date] = date.today,
-                 after_tick: Callable[[], None] | None = None):
+                 after_tick: Callable[[], None] | None = None,
+                 sleep: Callable[[float], None] = time_module.sleep):
         self.cfg, self.store, self.broker, self.market = cfg, store, broker, market
         self.analysts, self.scheduler = analysts, scheduler
         self.executor = Executor(broker, store, cfg)
         self.tz = ZoneInfo(cfg.timezone)
-        self.now, self._today, self._after_tick = now, today, after_tick
+        self.now, self._today, self._after_tick, self._sleep = now, today, after_tick, sleep
 
     # --- the tick
     def run_tick(self, tick: Tick) -> TickReport:
@@ -141,8 +143,14 @@ class Engine:
         if can_trade:
             placed = self.executor.place(plan_orders(rulings, tick_id, cfg, cash=account.cash), prices, now, tick_id)
             report.orders = len(placed)
+            if any(order["status"] in OPEN_ORDER_STATUSES for order in placed):
+                # A broker fills a marketable order within moments, not within the call
+                # that placed it. A short wait lets the fill, and the stop that guards
+                # it, be part of this tick instead of the next.
+                self._sleep(cfg.fill_wait_seconds)
+                self.executor.settle_open_orders(prices, self.now(), tick_id)
             stops = {p.ticker: p.stop_loss for p in proposals}
-            self.executor.sync_stops(self.broker.account(prices), stops, prices, now, tick_id)
+            self.executor.sync_stops(self.broker.account(prices), stops, prices, self.now(), tick_id)
 
         # --- what earlier decisions came to
         try:
@@ -287,7 +295,13 @@ def run_forever(engine: Engine, *, sleep: Callable[[float], None], stop: Callabl
     now = engine.now
     after = now()
     while not stop():
-        tick = engine.scheduler.next_tick(after)
+        try:
+            tick = engine.scheduler.next_tick(after)
+        except Exception as exc:  # noqa: BLE001 - a calendar that cannot be read now can be read in a minute
+            engine.store.log("warning", "scheduler", f"next tick not known ({type(exc).__name__}); trying again",
+                             at=timeutil.iso(now()))
+            sleep(60.0)
+            continue
         while (wait := (tick.at - now()).total_seconds()) > 0:
             if stop():
                 return

@@ -4,10 +4,12 @@ build the pages that show what it did."""
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import time
 import webbrowser
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Annotated
 from zoneinfo import ZoneInfo
@@ -94,6 +96,31 @@ def build_loop(cfg: LoopConfig, client: AlpacaClient | None = None, analysts=Non
 def _print_report(report: TickReport) -> None:
     colour = {"ok": "green", "error": "red", "skipped": "yellow"}[report.status]
     console.print(f"[{colour}]{report.tick_id}  {report.status}[/{colour}]  {report.note}", highlight=False)
+
+
+def _pid_file(cfg: LoopConfig) -> Path:
+    return cfg.data_dir / "run.pid"
+
+
+def _running_pid(cfg: LoopConfig) -> int | None:
+    """The process id of a loop already running on this data directory, or None."""
+    try:
+        pid = int(_pid_file(cfg).read_text().strip())
+        os.kill(pid, 0)          # signal 0 asks only whether the process is there
+    except (OSError, ValueError) as exc:
+        return pid if isinstance(exc, PermissionError) else None
+    return pid
+
+
+def _last_tick_time(loop: Loop, sessions: int) -> datetime:
+    """When the post-close tick of the ``sessions``-th trading session from now is due."""
+    cfg, now = loop.cfg, timeutil.utcnow()
+    delay = timedelta(minutes=cfg.postclose_delay_minutes)
+    ahead = [s.close + delay for s in loop.engine.scheduler.sessions(now) if s.close + delay > now]
+    if sessions < 1 or sessions > len(ahead):
+        console.print(f"[red]--sessions must be between 1 and {len(ahead)}, as far as the calendar is known[/red]")
+        raise typer.Exit(code=1)
+    return ahead[sessions - 1]
 
 
 @app.command()
@@ -214,20 +241,54 @@ def tick(config: ConfigOption = None,
 
 
 @app.command()
-def run(config: ConfigOption = None):
+def run(config: ConfigOption = None,
+        sessions: Annotated[int | None, typer.Option(
+            help="Stop after the post-close tick of this many trading sessions, counting the one "
+                 "under way or coming next. Default: run until stopped.")] = None):
     """Run the loop until interrupted: every tick as its time comes."""
-    loop = build_loop(_config(config))
-    cfg = loop.cfg
+    cfg = _config(config)
+    other = _running_pid(cfg)
+    if other is not None:
+        # Two loops on one book would each analyse every tick and pay for it twice.
+        console.print(f"[red]A loop is already running on {cfg.data_dir} (pid {other}). "
+                      "Stop it first: tradeloop stop[/red]")
+        raise typer.Exit(code=1)
+    loop = build_loop(cfg)
+    last = _last_tick_time(loop, sessions) if sessions else None
+    cfg.data_dir.mkdir(parents=True, exist_ok=True)
+    _pid_file(cfg).write_text(str(os.getpid()))
+
+    def interrupt(*_):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, interrupt)     # `tradeloop stop`, or a plain kill, ends it cleanly
     upcoming = loop.engine.scheduler.next_tick(timeutil.utcnow())
     console.print(f"tradeloop: {', '.join(cfg.tickers)}; execution={cfg.execution}; every {cfg.interval_minutes} min "
                   f"while the market is open. Next tick {upcoming.at:%m-%d %H:%M %Z} ({upcoming.kind}). "
-                  "Ctrl-C stops it.", highlight=False)
+                  + (f"Stops after the tick at {last:%m-%d %H:%M %Z}." if last else "Ctrl-C stops it."), highlight=False)
     try:
-        run_forever(loop.engine, sleep=time.sleep, on_tick=_print_report)
+        # One minute past the last tick's time: by then it has started, and the loop
+        # only looks at this between ticks, so it runs to its end first.
+        run_forever(loop.engine, sleep=time.sleep, on_tick=_print_report,
+                    stop=lambda: last is not None and timeutil.utcnow() >= last + timedelta(minutes=1))
+        console.print("The last session's post-close tick is done. Stopped.")
     except KeyboardInterrupt:
         console.print("Stopped.")
     finally:
         loop.store.close()
+        _pid_file(cfg).unlink(missing_ok=True)
+
+
+@app.command()
+def stop(config: ConfigOption = None):
+    """Stop the loop running on this data directory. Open positions and orders are left as they are."""
+    cfg = _config(config)
+    pid = _running_pid(cfg)
+    if pid is None:
+        console.print("No loop is running.")
+        return
+    os.kill(pid, signal.SIGTERM)
+    console.print(f"Asked the loop (pid {pid}) to stop. A tick under way is abandoned where it is.")
 
 
 @app.command(name="dashboard")

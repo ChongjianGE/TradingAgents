@@ -187,6 +187,49 @@ class TestRun:
         assert result.exit_code == 0 and "Stopped." in result.output
         assert ticks == ["20261111T0845-premarket", "20261111T0935-core"]
 
+    def test_it_stops_by_itself_after_the_last_sessions_post_close_tick(self, home, wired, monkeypatch):
+        from datetime import timedelta
+
+        client, analysts, clock = wired
+        clock[0] = et(11, "15:40")
+        ticks = []
+        monkeypatch.setattr(cli.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + timedelta(seconds=seconds)))
+        monkeypatch.setattr(cli, "_print_report", lambda report: ticks.append(report.tick_id))
+        result = runner.invoke(cli.app, ["run", "--sessions", "2"])
+        assert result.exit_code == 0, result.output
+        assert "Stops after the tick at 11-12 16:30 EST" in result.output
+        assert "The last session's post-close tick is done." in result.output
+        assert ticks[0] == "20261111T1630-postclose" and ticks[-1] == "20261112T1630-postclose"
+        assert not (home / "run.pid").exists()                  # the lock is released
+
+    def test_more_sessions_than_the_calendar_knows_is_refused(self, home, wired):
+        result = runner.invoke(cli.app, ["run", "--sessions", "99"])
+        assert result.exit_code == 1 and "--sessions must be between 1 and" in result.output
+
+    def test_a_second_loop_on_the_same_data_is_refused(self, home, wired):
+        import os
+
+        (home / "run.pid").write_text(str(os.getpid()))         # a process that is certainly alive
+        result = runner.invoke(cli.app, ["run"])
+        assert result.exit_code == 1 and "already running" in result.output
+
+    def test_a_stale_lock_from_a_dead_process_does_not_block_a_start(self, home, wired, monkeypatch):
+        (home / "run.pid").write_text("999999")
+        monkeypatch.setattr(cli.time, "sleep", lambda s: (_ for _ in ()).throw(KeyboardInterrupt))
+        result = runner.invoke(cli.app, ["run"])
+        assert result.exit_code == 0 and "Stopped." in result.output
+
+    def test_stop_signals_the_running_loop_and_says_so_when_there_is_none(self, home, wired, monkeypatch):
+        import os
+        import signal
+
+        assert "No loop is running." in runner.invoke(cli.app, ["stop"]).output
+        (home / "run.pid").write_text(str(os.getpid()))
+        sent = []
+        monkeypatch.setattr(cli.os, "kill", lambda pid, sig: sent.append((pid, sig)))
+        result = runner.invoke(cli.app, ["stop"])
+        assert sent[-1] == (os.getpid(), signal.SIGTERM) and "Asked the loop" in result.output
+
     def test_missing_keys_stop_it_before_anything_runs(self, home, monkeypatch):
         monkeypatch.delenv("APCA_API_KEY_ID")
         result = runner.invoke(cli.app, ["run"])

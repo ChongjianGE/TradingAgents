@@ -87,10 +87,10 @@ class Loop:
         self.market, self.analysts = FakeMarket(), FakeAnalysts(self.clock)
         self.broker = SimBroker(self.store, self.cfg)
         self.scheduler = Scheduler(lambda start, end: CALENDAR, self.cfg)
-        self.built = []
+        self.built, self.slept = [], []
         self.engine = Engine(self.cfg, self.store, self.broker, self.market, self.analysts, self.scheduler,
                              now=lambda: self.clock[0], today=lambda: self.clock[0].astimezone(ET).date(),
-                             after_tick=lambda: self.built.append(1))
+                             after_tick=lambda: self.built.append(1), sleep=self.slept.append)
 
     def tick(self, kind, day, hhmm):
         self.clock[0] = et(day, hhmm)
@@ -469,3 +469,82 @@ class TestRunningForever:
         calls = []
         run_forever(loop.engine, sleep=lambda s: calls.append(s), stop=lambda: bool(calls))
         assert len(calls) == 1 and loop.analysts.calls == []
+
+
+@pytest.mark.unit
+class TestABrokerThatFillsAMomentLater:
+    """An exchange fills a marketable order within moments, not within the call that placed it."""
+
+    def _loop(self, tmp_path):
+        from tradeloop.broker import OrderState
+
+        loop = Loop(tmp_path, confirm_rounds=1)
+
+        def accept_only(order, price, at):
+            if order.type == "stop":
+                return OrderState(status="new", broker_order_id=f"sim-{order.client_order_id}")
+            return OrderState(status="accepted", broker_order_id=f"sim-{order.client_order_id}")
+
+        loop.broker.submit = accept_only        # the fill comes on the next look, as at a real broker
+        return loop
+
+    def test_the_tick_waits_once_then_records_the_fill_and_places_the_stop(self, tmp_path):
+        loop = self._loop(tmp_path)
+        loop.analysts.say("NVDA", ("Buy", {"stop_loss": 95.0}))
+        report = loop.tick("core", 11, "09:35")
+
+        assert report.orders == 1 and loop.slept == [4.0]
+        (buy,) = loop.store.query("SELECT * FROM orders WHERE type = 'limit'")
+        assert buy["status"] == "filled" and buy["tick_id"] == "20261111T0935-core"
+        assert loop.qty() == 200.0
+        (stop,) = loop.store.query("SELECT * FROM orders WHERE type = 'stop'")
+        assert (stop["qty"], stop["stop_price"], stop["tick_id"]) == (200.0, 95.0, "20261111T0935-core")
+        loop.store.close()
+
+    def test_no_wait_when_nothing_is_left_open(self, loop):
+        loop.analysts.say("NVDA", "Hold")
+        loop.tick("core", 11, "09:35")
+        assert loop.slept == []
+
+
+@pytest.mark.unit
+class TestSurvivingOutages:
+    def test_a_calendar_that_cannot_be_read_today_falls_back_to_yesterdays(self, loop):
+        calls = []
+
+        def flaky(start, end):
+            calls.append(start)
+            if len(calls) > 1:
+                raise AlpacaError(0, "calendar unreachable")
+            return CALENDAR
+
+        scheduler = Scheduler(flaky, loop.cfg)
+        assert scheduler.next_tick(et(11, "08:00")).kind == "premarket"
+        tomorrow = scheduler.next_tick(et(12, "08:00"))           # the fetch fails; the cached calendar serves
+        assert (tomorrow.kind, tomorrow.at) == ("premarket", et(12, "08:45"))
+        assert len(calls) == 2
+        scheduler.next_tick(et(12, "09:00"))                       # and it is asked for again
+        assert len(calls) == 3
+
+    def test_with_no_calendar_at_all_the_loop_waits_and_tries_again(self, loop):
+        attempts, slept = [], []
+        real = loop.scheduler.next_tick
+
+        def next_tick(after):
+            attempts.append(after)
+            if len(attempts) == 1:
+                raise AlpacaError(0, "calendar unreachable")
+            return real(after)
+
+        loop.engine.scheduler.next_tick = next_tick
+        loop.clock[0] = et(11, "08:30")
+        seen = []
+
+        def sleep(seconds):
+            slept.append(seconds)
+            loop.clock[0] += timedelta(seconds=seconds)
+
+        run_forever(loop.engine, sleep=sleep, stop=lambda: len(seen) >= 1, on_tick=seen.append)
+        assert slept[0] == 60.0 and [r.tick_id for r in seen] == ["20261111T0845-premarket"]
+        (event,) = loop.store.query("SELECT message FROM events WHERE source = 'scheduler'")
+        assert "next tick not known" in event["message"]

@@ -116,7 +116,14 @@ class Scheduler:
         """Trading days around ``now``: a week back, for marking outcomes, and two ahead."""
         today = now.astimezone(self.tz).date()
         if self._fetched_for != today:
-            rows = self._fetch((today - timedelta(days=10)).isoformat(), (today + timedelta(days=14)).isoformat())
+            try:
+                rows = self._fetch((today - timedelta(days=10)).isoformat(), (today + timedelta(days=14)).isoformat())
+            except Exception:
+                # The calendar reaches two weeks ahead, so yesterday's copy still
+                # covers today; it is asked for again on the next call.
+                if not self._sessions:
+                    raise
+                return self._sessions
             self._sessions, self._fetched_for = sessions_from_calendar(rows, self.tz), today
         return self._sessions
 

@@ -99,8 +99,21 @@ class Executor:
                 placed.append(existing)      # this tick already placed it
                 continue
             price = prices[order.ticker]
+            if order.type != "stop":
+                # A resting stop holds the shares a sell needs, and a broker refuses a
+                # buy that could trade against one's own stop. It is put back after.
+                self._cancel_stops(order.ticker, at)
             if order.side == "sell":
-                self._cancel_stops(order.ticker, at)     # a stop holds the shares it would sell
+                # The book may have changed since it was read: a stop can fire while
+                # an analysis runs. Selling more than is held would open a short.
+                held = self.broker.account(prices).qty(order.ticker)
+                if held < order.qty:
+                    if held <= 0 or (order.type == "stop" and held < order.qty):
+                        self.store.log("warning", "executor",
+                                       f"sell of {order.qty:g} {order.ticker} dropped: {held:g} held now",
+                                       at=timeutil.iso(at), tick_id=tick_id, ticker=order.ticker)
+                        continue
+                    order = replace(order, qty=held if self.cfg.allow_fractional else float(math.floor(held + 1e-9)))
             if existing is None:
                 moment = timeutil.iso(at)
                 self.store.add_order(
@@ -163,6 +176,8 @@ class Executor:
         # The price of just this part, from the two running averages.
         before = (row["filled_qty"] or 0) * (row["filled_avg_price"] or 0)
         price = (state.filled_qty * state.filled_avg_price - before) / newly
+        if state.filled_at is not None:
+            moment = timeutil.iso(state.filled_at)
         self.store.add_fills([{
             "fill_id": f"{row['client_order_id']}:{state.filled_qty:g}",
             "broker_order_id": state.broker_order_id or row["broker_order_id"],
