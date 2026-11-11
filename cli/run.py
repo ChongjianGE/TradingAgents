@@ -24,6 +24,7 @@ from cli.display import (
 )
 from cli.selections import depth_from_env, get_user_selections, unattended_gaps
 from cli.stats_handler import StatsCallbackHandler
+from cli.usage import append_record, build_record, format_summary
 from tradingagents.agents.rating import is_review, run_rating
 from tradingagents.dataflows.symbols import safe_ticker_component
 from tradingagents.default_config import DEFAULT_CONFIG
@@ -237,6 +238,7 @@ def run_analysis(checkpoint: bool | None = None, portfolio=None, flags=None):
         # interrupted run instead of re-appending the initial state (#1249); the
         # try/finally tears the checkpointer down even if the stream raises.
         trace = []
+        completed = False
         try:
             for messages, chunk in graph.stream_run(graph.checkpoint_input(init_agent_state), **args):
                 for message in messages:
@@ -354,9 +356,18 @@ def run_analysis(checkpoint: bool | None = None, portfolio=None, flags=None):
             graph.clear_checkpoint_on_success(
                 selections["ticker"], selections["analysis_date"], selections["asset_type"], portfolio
             )
+            completed = True
         finally:
             # Always restore the plain uncheckpointed graph, even on failure.
             graph.end_checkpoint()
+            # A run that failed halfway was still billed, so its usage is logged too.
+            usage_record = build_record(
+                stats_handler.get_stats(), stats_handler.get_usage(),
+                ticker=selections["ticker"], trade_date=selections["analysis_date"],
+                analysts=selected_analyst_keys, elapsed_seconds=time.time() - start_time,
+                completed=completed,
+            )
+            usage_log = append_record(config["results_dir"], usage_record)
 
         for agent in message_buffer.agent_status:
             message_buffer.update_agent_status(agent, "completed")
@@ -365,6 +376,7 @@ def run_analysis(checkpoint: bool | None = None, portfolio=None, flags=None):
             "System", f"Completed analysis for {selections['analysis_date']}"
         )
         message_buffer.add_message("System", analyst_wall_time_tracker.format_summary())
+        message_buffer.add_message("System", format_summary(usage_record))
 
         for section in message_buffer.report_sections:
             if section in final_state:
@@ -384,6 +396,11 @@ def run_analysis(checkpoint: bool | None = None, portfolio=None, flags=None):
             "decision text below and judge it yourself.[/yellow]\n"
         )
     console.print(f"[dim]{analyst_wall_time_tracker.format_summary()}[/dim]")
+    console.print(f"[dim]{format_summary(usage_record)}[/dim]")
+    if usage_log is not None:
+        console.print(f"[dim]Usage log: {usage_log}[/dim]")
+    else:
+        console.print("[yellow]This run's usage could not be added to the usage log.[/yellow]")
 
     _offer_reports(final_state, graph, selections["ticker"],
                    save=flags.get("save"), show=flags.get("show"), html=flags.get("html"))

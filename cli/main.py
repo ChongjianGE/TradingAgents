@@ -160,6 +160,27 @@ def backtest(
         console.print(f"[yellow]unsettled:[/yellow] {ticker}: {reason}")
 
 
+@app.command()
+def usage():
+    """Show what analyses have used and cost, per day, from the usage log."""
+    from cli.usage import PRICES_AS_OF, USAGE_LOG, daily_totals, read_log
+
+    days = daily_totals(read_log(DEFAULT_CONFIG["results_dir"]))
+    if not days:
+        console.print(f"No runs in {DEFAULT_CONFIG['results_dir']}/{USAGE_LOG} yet.")
+        return
+    console.print(f"{'day':<12}{'runs':>6}{'failed':>8}{'tokens in':>12}{'tokens out':>12}{'cost':>10}")
+    for day in days:
+        cost = f"${day['cost_usd']:.2f}" + ("+" if day["unpriced"] else "")
+        console.print(
+            f"{day['day']:<12}{day['runs']:>6}{day['failed']:>8}"
+            f"{day['input_tokens']:>12,}{day['output_tokens']:>12,}{cost:>10}",
+            highlight=False,
+        )
+    console.print(f"\n[dim]Cost is at list prices as of {PRICES_AS_OF}; a + marks a day with "
+                  "a model that has no price on file, whose cost is not included.[/dim]")
+
+
 # The plans `login` and `logout` take: the providers signed in to, not keyed.
 Plan = StrEnum("Plan", {name: name for name in SIGNED_IN_PROVIDERS})
 

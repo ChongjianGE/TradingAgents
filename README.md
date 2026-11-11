@@ -217,6 +217,8 @@ At start-up the interactive CLI mentions a newer release and notices from Tauric
 
 A saved report also includes `complete_report.html`, the report as one page with its sections listed beside the text, for reading in a browser, on a phone or in print. Answering the save question at the prompt also asks about the page and can open it in your browser; `--no-html` skips it, and so does `ta.save_reports(state, "NVDA", html=False)` from Python.
 
+Each run ends with a line on the tokens it used and, for models with a list price on file, what they cost. The same record is appended to `usage_log.jsonl` under the results directory, for a run that failed halfway too, and `tradingagents usage` totals the log per day.
+
 ### Markets and tickers
 
 TradingAgents works with any market Yahoo Finance covers, using the exchange-suffixed ticker. Company identity and the alpha benchmark resolve automatically per market.

@@ -16,6 +16,9 @@ class StatsCallbackHandler(BaseCallbackHandler):
         self.tool_calls = 0
         self.tokens_in = 0
         self.tokens_out = 0
+        # Tokens per model as the provider named it, for pricing a run: the
+        # quick and deep tiers bill at different rates.
+        self.by_model: dict[str, dict[str, int]] = {}
 
     def on_llm_start(
         self,
@@ -51,9 +54,22 @@ class StatsCallbackHandler(BaseCallbackHandler):
                 usage_metadata = message.usage_metadata
 
         if usage_metadata:
+            tokens_in = usage_metadata.get("input_tokens", 0) or 0
+            tokens_out = usage_metadata.get("output_tokens", 0) or 0
+            cached = usage_metadata.get("input_token_details") or {}
+            model = _model_name(generation.message, response)
             with self._lock:
-                self.tokens_in += usage_metadata.get("input_tokens", 0)
-                self.tokens_out += usage_metadata.get("output_tokens", 0)
+                self.tokens_in += tokens_in
+                self.tokens_out += tokens_out
+                row = self.by_model.setdefault(model, {
+                    "calls": 0, "input_tokens": 0, "output_tokens": 0,
+                    "cache_read_tokens": 0, "cache_creation_tokens": 0,
+                })
+                row["calls"] += 1
+                row["input_tokens"] += tokens_in
+                row["output_tokens"] += tokens_out
+                row["cache_read_tokens"] += cached.get("cache_read", 0) or 0
+                row["cache_creation_tokens"] += cached.get("cache_creation", 0) or 0
 
     def on_tool_start(
         self,
@@ -74,3 +90,16 @@ class StatsCallbackHandler(BaseCallbackHandler):
                 "tokens_in": self.tokens_in,
                 "tokens_out": self.tokens_out,
             }
+
+    def get_usage(self) -> dict[str, dict[str, int]]:
+        """Tokens per model, for the calls whose provider reported a count."""
+        with self._lock:
+            return {model: dict(row) for model, row in self.by_model.items()}
+
+
+def _model_name(message: AIMessage, response: LLMResult) -> str:
+    """The model that answered, as the provider reports it."""
+    metadata = getattr(message, "response_metadata", None) or {}
+    output = getattr(response, "llm_output", None) or {}
+    return (metadata.get("model_name") or metadata.get("model")
+            or output.get("model_name") or output.get("model") or "unknown")
