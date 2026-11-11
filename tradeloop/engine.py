@@ -14,6 +14,7 @@ whole is recorded as failed and the loop goes on to the next one.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import time as time_module
 from collections.abc import Callable
@@ -144,11 +145,7 @@ class Engine:
             placed = self.executor.place(plan_orders(rulings, tick_id, cfg, cash=account.cash), prices, now, tick_id)
             report.orders = len(placed)
             if any(order["status"] in OPEN_ORDER_STATUSES for order in placed):
-                # A broker fills a marketable order within moments, not within the call
-                # that placed it. A short wait lets the fill, and the stop that guards
-                # it, be part of this tick instead of the next.
-                self._sleep(cfg.fill_wait_seconds)
-                self.executor.settle_open_orders(prices, self.now(), tick_id)
+                self._await_fills(prices, tick_id)
             stops = {p.ticker: p.stop_loss for p in proposals}
             self.executor.sync_stops(self.broker.account(prices), stops, prices, self.now(), tick_id)
 
@@ -162,6 +159,29 @@ class Engine:
                        f"{len(self.cfg.tickers) - len(to_run)} reused or skipped, {report.orders} orders")
 
     # --- the pieces
+    def _await_fills(self, prices: dict[str, float], tick_id: str) -> None:
+        """Give this tick's orders time to fill, then withdraw what is left of them.
+
+        A broker fills a marketable order within moments, not within the call that
+        placed it, and may fill it in parts. It also refuses a stop while a buy of
+        the same name is still working. So every order is seen through to an end,
+        filled or withdrawn, before the stops go in; ``prices`` is brought up to
+        date on the way, for the stops to be checked against.
+        """
+        cfg, waited = self.cfg, 0.0
+        while waited < cfg.fill_wait_seconds:
+            pause = min(max(cfg.fill_poll_seconds, 0.1), cfg.fill_wait_seconds - waited)
+            self._sleep(pause)
+            waited += pause
+            names = sorted({row["ticker"] for row in self.executor.working(tick_id)})
+            if not names:
+                return
+            with contextlib.suppress(Exception):   # the prices already in hand will do for one look
+                prices.update({t: q.price for t, q in self.market.quotes(names).items()})
+            if not self.executor.settle_working(prices, self.now(), tick_id):
+                return
+        self.executor.withdraw_working(self.now(), tick_id)
+
     def _snapshot(self, tick_id: str, now: datetime, account: Account, prices: dict[str, float]) -> None:
         positions = [{"ticker": p.ticker, "qty": p.qty, "avg_price": p.avg_price, "price": prices.get(p.ticker)}
                      for p in account.positions.values()]

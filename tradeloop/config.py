@@ -73,7 +73,8 @@ class LoopConfig(BaseModel):
     slippage_bps: float = 1.0
     sell_fee_per_share: float = 0.0       # regulatory fees; set from the broker's schedule
     limit_offset_bps: float = 10.0        # how far past the last price a limit order reaches
-    fill_wait_seconds: float = 4.0        # how long a tick waits for its own orders to fill before moving on
+    fill_wait_seconds: float = 120.0      # how long a tick's orders may take to fill; the rest is then withdrawn
+    fill_poll_seconds: float = 3.0        # how often it looks while waiting
 
     # --- where orders go
     # "simulate" keeps a book of its own and sends nothing; "alpaca_paper" sends

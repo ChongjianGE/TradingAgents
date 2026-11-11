@@ -204,6 +204,121 @@ class TestSettlingOpenOrders:
         assert fill["at"] == "2026-11-11T15:35:02Z"            # not the time the tick looked
 
 
+class Resting:
+    """A broker whose orders rest until told otherwise.
+
+    ``answers`` maps a client order id to what each look at it returns; with none
+    left, an order stays as it was, or reads as cancelled once it has been.
+    """
+
+    name = "alpaca_paper"
+
+    def __init__(self, answers=None, cannot_cancel=()):
+        self.answers, self.cancelled, self.cannot_cancel = answers or {}, [], set(cannot_cancel)
+
+    def account(self, prices):
+        return held()
+
+    def submit(self, order, price, at):
+        return OrderState("new", broker_order_id=f"b-{order.client_order_id}")
+
+    def refresh(self, row, price, at):
+        if self.answers.get(row["client_order_id"]):
+            return self.answers[row["client_order_id"]].pop(0)
+        status = "canceled" if row["client_order_id"] in self.cancelled else row["status"]
+        return OrderState(status, row["filled_qty"] or 0, row["filled_avg_price"], row["broker_order_id"])
+
+    def cancel(self, row):
+        if row["ticker"] in self.cannot_cancel:
+            raise ConnectionError("no route to the broker")
+        self.cancelled.append(row["client_order_id"])
+
+
+BUY = "tl-20261111T1035-core-NVDA-buy"
+
+
+@pytest.mark.unit
+class TestSeeingOrdersToAnEnd:
+    """A stop is refused while a buy of the same name is working, so each order ends before the stops go in."""
+
+    def _placed(self, store, broker, *tickers):
+        tick_id = tick(store)
+        executor = Executor(broker, store, CFG)
+        executor.place(plan_orders([ruling(t) for t in tickers or ("NVDA",)], tick_id, CFG),
+                       dict.fromkeys(tickers or ("NVDA",), 100.0), NOW, tick_id)
+        return executor, tick_id
+
+    def test_only_this_ticks_orders_that_are_not_stops_count_as_working(self, store):
+        from tradeloop.broker import OrderRequest
+
+        executor, tick_id = self._placed(store, Resting())
+        earlier = tick(store, "20261111T0935-core")
+        executor.place(plan_orders([ruling("CSCO")], earlier, CFG), {"CSCO": 100.0}, NOW, earlier)
+        executor.place([OrderRequest(ticker="HD", side="sell", qty=10.0, type="stop", stop_price=90.0,
+                                     time_in_force="gtc", client_order_id=f"tl-{tick_id}-HD-stop")],
+                       {"HD": 100.0}, NOW, tick_id)
+        assert len(store.open_orders("alpaca_paper")) == 2      # the stop for HD was dropped: none is held
+        assert [row["client_order_id"] for row in executor.working(tick_id)] == [BUY]
+
+    def test_a_look_records_what_filled_and_counts_what_still_waits(self, store):
+        broker = Resting({BUY: [OrderState("partially_filled", 80.0, 100.0, "o1"), OrderState("filled", 200.0, 100.06, "o1")]})
+        executor, tick_id = self._placed(store, broker)
+
+        assert executor.settle_working({"NVDA": 100.0}, NOW, tick_id) == 1
+        assert [f["qty"] for f in store.query("SELECT qty FROM fills")] == [80.0]
+        assert executor.settle_working({"NVDA": 100.0}, NOW, tick_id) == 0
+        assert executor.working(tick_id) == [] and store.order(BUY)["status"] == "filled"
+
+    def test_withdrawing_cancels_the_rest_and_keeps_the_part_that_filled(self, store):
+        broker = Resting({BUY: [OrderState("partially_filled", 80.0, 100.0, "o1")]})
+        executor, tick_id = self._placed(store, broker)
+        executor.settle_working({"NVDA": 100.0}, NOW, tick_id)
+
+        (ended,) = executor.withdraw_working(NOW + timedelta(minutes=2), tick_id)
+        assert broker.cancelled == [BUY]
+        assert (ended["status"], ended["filled_qty"], ended["qty"]) == ("canceled", 80.0, 200.0)
+        assert [f["qty"] for f in store.query("SELECT qty FROM fills")] == [80.0]
+        (event,) = store.query("SELECT level, ticker, message FROM events")
+        assert (event["level"], event["ticker"]) == ("info", "NVDA")
+        assert "80 of 200 filled in time, the rest withdrawn" in event["message"]
+        assert executor.working(tick_id) == []
+
+    def test_shares_that_fill_just_before_the_cancel_lands_are_recorded(self, store):
+        broker = Resting({BUY: [OrderState("partially_filled", 80.0, 100.0, "o1"),
+                                OrderState("canceled", 130.0, 100.0, "o1")]})
+        executor, tick_id = self._placed(store, broker)
+        executor.settle_working({"NVDA": 100.0}, NOW, tick_id)
+
+        (ended,) = executor.withdraw_working(NOW, tick_id)
+        assert (ended["status"], ended["filled_qty"]) == ("canceled", 130.0)
+        assert [f["qty"] for f in store.query("SELECT qty FROM fills ORDER BY qty")] == [50.0, 80.0]
+
+    def test_an_order_that_filled_whole_before_the_cancel_stays_filled(self, store):
+        broker = Resting({BUY: [OrderState("filled", 200.0, 100.02, "o1")]})
+        executor, tick_id = self._placed(store, broker)
+
+        (ended,) = executor.withdraw_working(NOW, tick_id)
+        assert (ended["status"], ended["filled_qty"]) == ("filled", 200.0)
+        assert store.query("SELECT * FROM events") == []
+
+    def test_a_cancel_the_broker_has_not_finished_still_closes_the_order_here(self, store):
+        broker = Resting({BUY: [OrderState("pending_cancel", 0.0, None, "o1")]})
+        executor, tick_id = self._placed(store, broker)
+
+        (ended,) = executor.withdraw_working(NOW, tick_id)
+        assert ended["status"] == "canceled" and store.open_orders("alpaca_paper") == []
+
+    def test_one_order_that_cannot_be_withdrawn_does_not_keep_the_others_open(self, store):
+        broker = Resting(cannot_cancel={"NVDA"})
+        executor, tick_id = self._placed(store, broker, "NVDA", "CSCO")
+
+        ended = executor.withdraw_working(NOW, tick_id)
+        assert [(row["ticker"], row["status"]) for row in ended] == [("CSCO", "canceled")]
+        assert [row["ticker"] for row in executor.working(tick_id)] == ["NVDA"]
+        (error,) = store.query("SELECT ticker, message FROM events WHERE level = 'error'")
+        assert error["ticker"] == "NVDA" and "could not be withdrawn (ConnectionError)" in error["message"]
+
+
 def OrderRequestFor(ticker, side, qty):  # noqa: N802 - reads as a constructor at the call site
     from tradeloop.broker import OrderRequest
 

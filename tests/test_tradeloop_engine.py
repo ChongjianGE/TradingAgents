@@ -11,7 +11,7 @@ import pytest
 from tradeloop import timeutil
 from tradeloop.alpaca import AlpacaError, Bar, Quote
 from tradeloop.analysis import AnalysisResult
-from tradeloop.broker import SimBroker
+from tradeloop.broker import OrderState, SimBroker
 from tradeloop.config import LoopConfig
 from tradeloop.engine import Engine, run_forever
 from tradeloop.schedule import Scheduler, Tick
@@ -80,12 +80,12 @@ class FakeAnalysts:
 
 
 class Loop:
-    def __init__(self, tmp_path, **settings):
+    def __init__(self, tmp_path, broker=SimBroker, **settings):
         self.cfg = LoopConfig(data_dir=tmp_path / "loop", tickers=TICKERS, **settings)
         self.store = Store(self.cfg.db_path)
         self.clock = [et(11, "08:45")]
         self.market, self.analysts = FakeMarket(), FakeAnalysts(self.clock)
-        self.broker = SimBroker(self.store, self.cfg)
+        self.broker = broker(self.store, self.cfg)
         self.scheduler = Scheduler(lambda start, end: CALENDAR, self.cfg)
         self.built, self.slept = [], []
         self.engine = Engine(self.cfg, self.store, self.broker, self.market, self.analysts, self.scheduler,
@@ -493,7 +493,7 @@ class TestABrokerThatFillsAMomentLater:
         loop.analysts.say("NVDA", ("Buy", {"stop_loss": 95.0}))
         report = loop.tick("core", 11, "09:35")
 
-        assert report.orders == 1 and loop.slept == [4.0]
+        assert report.orders == 1 and loop.slept == [3.0]      # one look was enough
         (buy,) = loop.store.query("SELECT * FROM orders WHERE type = 'limit'")
         assert buy["status"] == "filled" and buy["tick_id"] == "20261111T0935-core"
         assert loop.qty() == 200.0
@@ -505,6 +505,164 @@ class TestABrokerThatFillsAMomentLater:
         loop.analysts.say("NVDA", "Hold")
         loop.tick("core", 11, "09:35")
         assert loop.slept == []
+
+
+class PartBroker(SimBroker):
+    """Fills as an exchange can: accepted at once, then filled in parts, a scripted number of shares per look.
+
+    Like Alpaca it refuses a stop while a buy of the same name is working, and a
+    buy while a stop of that name rests ("potential wash trade").
+    """
+
+    def __init__(self, store, cfg):
+        super().__init__(store, cfg)
+        self.script: dict[str, list[float]] = {}
+        self.cancelled: list[str] = []
+
+    def _open(self, ticker, stops):
+        return [r for r in self.store.open_orders(self.name)
+                if r["ticker"] == ticker and (r["type"] == "stop") == stops and r["status"] != "pending_new"]
+
+    def submit(self, order, price, at):
+        if self._open(order.ticker, stops=order.type != "stop"):
+            return OrderState(status="rejected", error="403 potential wash trade detected")
+        status = "new" if order.type == "stop" else "accepted"
+        return OrderState(status=status, broker_order_id=f"sim-{order.client_order_id}")
+
+    def cancel(self, order):
+        self.cancelled.append(order["client_order_id"])
+
+    def refresh(self, order, price, at):
+        if order["type"] == "stop":
+            return super().refresh(order, price, at)
+        done, paid = order["filled_qty"] or 0.0, order["filled_avg_price"] or 0.0
+        if order["client_order_id"] in self.cancelled:
+            return OrderState("canceled", done, paid or None, order["broker_order_id"])
+        steps = self.script.get(order["ticker"], [])
+        part = min(steps.pop(0), order["qty"] - done) if steps and price is not None else 0.0
+        if part <= 0:
+            return OrderState("partially_filled" if done else "accepted", done, paid or None, order["broker_order_id"])
+        fill = self._try_fill(order["ticker"], order["side"], part, "market", None, price, order["broker_order_id"])
+        total = done + part
+        return OrderState("filled" if total >= order["qty"] else "partially_filled", total,
+                          (done * paid + part * fill.filled_avg_price) / total, order["broker_order_id"])
+
+
+@pytest.mark.unit
+class TestOrdersThatFillInPartsOrNotAtAll:
+    """Every order ends, filled or withdrawn, before the stops go in; what is missing is the next tick's."""
+
+    TICK = "20261111T0935-core"
+
+    def _loop(self, tmp_path, script, **settings):
+        loop = Loop(tmp_path, broker=PartBroker, confirm_rounds=1, **settings)
+        loop.broker.script["NVDA"] = list(script)
+        loop.analysts.say("NVDA", ("Buy", {"stop_loss": 95.0}))
+        return loop
+
+    def _orders(self, loop, kind):
+        return loop.store.query("SELECT * FROM orders WHERE type = ? ORDER BY submitted_at, client_order_id", (kind,))
+
+    def test_parts_are_waited_for_and_one_stop_guards_the_whole_fill(self, tmp_path):
+        loop = self._loop(tmp_path, [80, 0, 120])
+        report = loop.tick("core", 11, "09:35")
+
+        assert report.status == "ok" and loop.slept == [3.0, 3.0, 3.0]
+        (buy,) = self._orders(loop, "limit")
+        assert (buy["status"], buy["filled_qty"]) == ("filled", 200.0)
+        assert [f["qty"] for f in loop.store.query("SELECT qty FROM fills ORDER BY rowid")] == [80.0, 120.0]
+        (stop,) = self._orders(loop, "stop")
+        assert (stop["status"], stop["qty"], stop["stop_price"], stop["tick_id"]) == ("new", 200.0, 95.0, self.TICK)
+        loop.store.close()
+
+    def test_what_has_not_filled_in_time_is_withdrawn_and_the_stop_covers_what_did(self, tmp_path):
+        loop = self._loop(tmp_path, [80])
+        report = loop.tick("core", 11, "09:35")
+
+        assert report.status == "ok" and sum(loop.slept) == 120.0 and len(loop.slept) == 40
+        (buy,) = self._orders(loop, "limit")
+        assert (buy["status"], buy["filled_qty"], buy["qty"]) == ("canceled", 80.0, 200.0)
+        assert loop.qty() == 80.0
+        (stop,) = self._orders(loop, "stop")          # placed, not refused: nothing of NVDA's was working any more
+        assert (stop["status"], stop["qty"], stop["tick_id"]) == ("new", 80.0, self.TICK)
+        (event,) = loop.store.query("SELECT message FROM events WHERE source = 'executor'")
+        assert "80 of 200 filled in time" in event["message"]
+        loop.store.close()
+
+    def test_the_next_tick_orders_what_is_missing_and_the_stop_grows_with_it(self, tmp_path):
+        loop = self._loop(tmp_path, [80])
+        loop.tick("core", 11, "09:35")
+        loop.broker.script["NVDA"] = [120]
+        report = loop.tick("core", 11, "10:35")
+
+        assert report.orders == 1 and report.analysed == [] and len(loop.analysts.calls) == 1   # on the standing decision
+        first, second = self._orders(loop, "limit")
+        # 119, not 120: the first 80 cost their spread, and a fifth of what is left buys 199 in all.
+        assert (second["qty"], second["status"], second["tick_id"]) == (119.0, "filled", "20261111T1035-core")
+        assert loop.qty() == 199.0
+        old, new = self._orders(loop, "stop")
+        assert (old["status"], old["qty"]) == ("canceled", 80.0)
+        assert (new["status"], new["qty"]) == ("new", 199.0)
+        assert loop.store.query("SELECT * FROM orders WHERE status = 'rejected'") == []
+        loop.store.close()
+
+    def test_an_add_that_fills_in_part_still_ends_with_the_whole_position_guarded(self, tmp_path):
+        loop = self._loop(tmp_path, [80])
+        loop.tick("core", 11, "09:35")
+        loop.broker.script["NVDA"] = [50]              # of the 119 asked for
+        loop.tick("core", 11, "10:35")
+
+        assert loop.qty() == 130.0
+        stops = self._orders(loop, "stop")
+        assert [(s["status"], s["qty"]) for s in stops] == [("canceled", 80.0), ("new", 130.0)]
+        assert loop.store.query("SELECT * FROM orders WHERE status = 'rejected'") == []
+        loop.store.close()
+
+    def test_an_order_the_price_ran_away_from_leaves_no_position_and_no_stop(self, tmp_path):
+        loop = self._loop(tmp_path, [])
+        report = loop.tick("core", 11, "09:35")
+
+        assert report.status == "ok" and report.orders == 1
+        (buy,) = self._orders(loop, "limit")
+        assert (buy["status"], buy["filled_qty"]) == ("canceled", 0.0)
+        assert loop.qty() == 0 and self._orders(loop, "stop") == []
+        assert loop.store.query("SELECT * FROM fills") == []
+        loop.store.close()
+
+    def test_the_wait_ends_on_time_when_it_is_not_a_whole_number_of_looks(self, tmp_path):
+        loop = self._loop(tmp_path, [], fill_wait_seconds=5.0)
+        loop.tick("core", 11, "09:35")
+        assert loop.slept == [3.0, 2.0]
+        loop.store.close()
+
+    def test_no_wait_at_all_withdraws_at_once(self, tmp_path):
+        loop = self._loop(tmp_path, [200], fill_wait_seconds=0.0)
+        loop.tick("core", 11, "09:35")
+        assert loop.slept == [] and loop.qty() == 0
+        assert self._orders(loop, "limit")[0]["status"] == "canceled"
+        loop.store.close()
+
+    def test_prices_that_cannot_be_read_while_waiting_do_not_fail_the_tick(self, tmp_path):
+        loop = self._loop(tmp_path, [0, 200])
+
+        def sleep(seconds):
+            loop.slept.append(seconds)
+            loop.market.down = True                    # the data feed drops once the orders are out
+
+        loop.engine._sleep = sleep
+        report = loop.tick("core", 11, "09:35")
+        assert report.status == "ok" and loop.slept == [3.0, 3.0]
+        assert loop.qty() == 200.0 and self._orders(loop, "stop")[0]["qty"] == 200.0
+        loop.store.close()
+
+    def test_while_waiting_only_the_names_with_orders_out_are_priced(self, tmp_path):
+        loop = self._loop(tmp_path, [0, 200])
+        asked = []
+        quotes = loop.market.quotes
+        loop.market.quotes = lambda symbols: asked.append(list(symbols)) or quotes(symbols)
+        loop.tick("core", 11, "09:35")
+        assert asked[-2:] == [["NVDA"], ["NVDA"]]
+        loop.store.close()
 
 
 @pytest.mark.unit

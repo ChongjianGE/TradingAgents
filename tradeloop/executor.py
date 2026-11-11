@@ -89,6 +89,52 @@ class Executor:
                 self._cancel(row, at)
         return filled
 
+    def working(self, tick_id: str) -> list[dict]:
+        """This tick's orders that are still waiting to fill; stops rest and do not count."""
+        return [row for row in self.store.open_orders(self.broker.name)
+                if row["type"] != "stop" and row["tick_id"] == tick_id]
+
+    def settle_working(self, prices: dict[str, float], at: datetime, tick_id: str) -> int:
+        """Look at each of this tick's waiting orders once; returns how many still wait."""
+        waiting = 0
+        for row in self.working(tick_id):
+            state = self.broker.refresh(row, prices.get(row["ticker"]), at)
+            self._record(row, state, at)
+            waiting += state.is_open
+        return waiting
+
+    def withdraw_working(self, at: datetime, tick_id: str) -> list[dict]:
+        """Cancel what is left of this tick's waiting orders, keeping whatever part filled.
+
+        A broker refuses a protective stop while an order on the other side of the
+        same name is still working, so nothing may be left working when the stops
+        go in. The part that did not fill is the next tick's to order again, at the
+        price of that moment. Returns the orders as they ended.
+        """
+        ended = []
+        for row in self.working(tick_id):
+            order_id = row["client_order_id"]
+            try:
+                self.broker.cancel(row)
+                # The last word on what filled before the cancel landed.
+                state = self.broker.refresh(row, None, at)
+                self._record(row, state, at)
+                if state.status != "filled":
+                    self.store.update_order(order_id, status="canceled", updated_at=timeutil.iso(at))
+            except Exception as exc:  # noqa: BLE001 - one order that cannot be withdrawn must not cost the others their stops
+                self.store.log("error", "executor",
+                               f"{row['side']} of {row['ticker']} could not be withdrawn ({type(exc).__name__})",
+                               at=timeutil.iso(at), tick_id=tick_id, ticker=row["ticker"])
+                continue
+            final = self.store.order(order_id)
+            if final["status"] != "filled":
+                self.store.log("info", "executor",
+                               f"{final['side']} of {final['ticker']}: {final['filled_qty'] or 0:g} of "
+                               f"{final['qty']:g} filled in time, the rest withdrawn",
+                               at=timeutil.iso(at), tick_id=tick_id, ticker=final["ticker"])
+            ended.append(final)
+        return ended
+
     # --- new orders
     def place(self, orders: list[OrderRequest], prices: dict[str, float], at: datetime, tick_id: str) -> list[dict]:
         """Send ``orders``; each is recorded before it is sent, so a crash leaves a trace."""
