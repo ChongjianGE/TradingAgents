@@ -9,7 +9,7 @@ from datetime import timedelta
 
 import pytest
 
-from tests.test_tradeloop_engine import TICKERS, Loop, et
+from tests.test_tradeloop_engine import ET, TICKERS, Loop, et
 from tradeloop import dashboard, timeutil
 from tradeloop.alpaca import Bar
 
@@ -227,14 +227,14 @@ class TestThePriceChart:
     """The price by five-minute bar, with a triangle where each buy and sell filled."""
 
     def test_fewer_than_two_bars_says_so(self):
-        assert "Not enough prices" in dashboard._price_chart(_bars(11, count=1))
+        assert "Not enough prices" in dashboard._price_chart(_bars(11, count=2))     # an open and one close
 
     def test_a_buy_is_a_triangle_under_the_price_paid_and_a_sell_one_above_it(self):
         bars = _bars(11)
         svg = dashboard._price_chart(bars, [(et(11, "09:41"), "buy", 57.0, 100.2), (et(11, "14:02"), "sell", 12.0, 105.3)])
         buy, sell = re.findall(r'<g class="(up|down)">.*?<polygon points="([^"]+)".*?<title>([^<]+)</title>', svg)
-        assert (buy[0], buy[2]) == ("up", "11-11 09:40 bought 57 at $100.20")
-        assert (sell[0], sell[2]) == ("down", "11-11 14:00 sold 12 at $105.30")
+        assert (buy[0], buy[2]) == ("up", "11-11 09:41 bought 57 at $100.20")
+        assert (sell[0], sell[2]) == ("down", "11-11 14:02 sold 12 at $105.30")
         tip, left, right = (tuple(map(float, point.split(","))) for point in buy[1].split())
         assert left[1] == right[1] > tip[1] and right[0] - left[0] >= 8      # under its tip, and wide enough to see
         tip, left, right = (tuple(map(float, point.split(","))) for point in sell[1].split())
@@ -254,6 +254,18 @@ class TestThePriceChart:
         assert tip > line                                # paid less than the bars show: the tip is below the line
         tip, line = tip_and_line(102.0)
         assert tip < line
+
+    def test_a_mark_sits_at_the_moment_of_its_fill_between_the_two_points_around_it(self):
+        points = [(et(11, "09:30"), 100.0), (et(11, "09:35"), 100.0), (et(11, "09:40"), 100.0), (et(11, "09:45"), 100.0)]
+        xs = [float(v) for v in re.findall(r"[ML]([\d.]+),", re.search(r'<path d="([^"]+)"', dashboard._price_chart(points)).group(1))]
+
+        def tip_x(moment):
+            svg = dashboard._price_chart(points, [(moment, "buy", 1.0, 100.0)])
+            return float(re.search(r'<polygon points="([\d.]+),', svg).group(1))
+
+        assert tip_x(et(11, "09:40")) == pytest.approx(xs[2], abs=0.1)
+        assert tip_x(et(11, "09:42") + timedelta(seconds=30)) == pytest.approx((xs[2] + xs[3]) / 2, abs=0.1)
+        assert xs[2] < tip_x(et(11, "09:40") + timedelta(seconds=6)) < xs[2] + (xs[3] - xs[2]) * 0.05
 
     def test_an_order_filled_in_parts_within_one_bar_is_one_mark_at_its_average(self):
         svg = dashboard._price_chart(_bars(11), [(et(11, "09:40") + timedelta(seconds=6), "buy", 19.0, 174.41),
@@ -302,6 +314,43 @@ class TestThePriceChart:
 
 
 @pytest.mark.unit
+class TestThePriceLineFromBars:
+    """A bar is five minutes of trading: its close belongs at its end, or the line runs ahead of the trades."""
+
+    ROWS = [   # NVDA on the first live day, as Alpaca gave it
+        {"at": "2026-11-11T13:00:00Z", "open": 175.30, "close": 175.35},      # 08:00, before the open
+        {"at": "2026-11-11T14:30:00Z", "open": 172.71, "close": 173.86},
+        {"at": "2026-11-11T14:35:00Z", "open": 173.86, "close": 174.57},
+        {"at": "2026-11-11T14:40:00Z", "open": 174.57, "close": 171.83},
+        {"at": "2026-11-11T14:45:00Z", "open": 171.865, "close": 172.09},
+        {"at": "2026-11-11T21:00:00Z", "open": 173.60, "close": 173.55},      # 16:00, after the close
+    ]
+
+    def _points(self, rows=None):
+        return dashboard._price_points(rows or self.ROWS, lambda at: timeutil.parse(at).astimezone(ET))
+
+    def test_each_close_is_put_at_the_end_of_its_bar_and_the_day_starts_at_its_open(self):
+        assert self._points() == [
+            (et(11, "09:30"), 172.71), (et(11, "09:35"), 173.86), (et(11, "09:40"), 174.57),
+            (et(11, "09:45"), 171.83), (et(11, "09:50"), 172.09)]
+
+    def test_every_day_starts_at_its_own_open(self):
+        rows = self.ROWS[1:3] + [{"at": "2026-11-12T14:30:00Z", "open": 180.0, "close": 181.0}]
+        assert self._points(rows)[-2:] == [(et(12, "09:30"), 180.0), (et(12, "09:35"), 181.0)]
+
+    def test_a_purchase_at_the_start_of_a_falling_bar_touches_the_line(self):
+        """57 shares filled at 09:40:06 for 174.39, six seconds into a bar that then fell to 171.83.
+        Drawn with each close at its bar's start, the line stood at 171.83 where the purchase was marked."""
+        svg = dashboard._price_chart(self._points(), [(et(11, "09:40") + timedelta(seconds=6), "buy", 57.0, 174.39)])
+        line = [(float(x), float(y)) for x, y in re.findall(r"[ML]([\d.]+),([\d.]+)", re.search(r'<path d="([^"]+)"', svg).group(1))]
+        tip_x, tip_y = map(float, re.search(r'<polygon points="([\d.]+),([\d.]+) ', svg).groups())
+        (x0, y0), (x1, y1) = line[2], line[3]                 # the points at 09:40 and 09:45
+        on_the_line = y0 + (tip_x - x0) / (x1 - x0) * (y1 - y0)
+        full_drop = y1 - y0
+        assert x0 < tip_x < x1 and abs(tip_y - on_the_line) < 0.1 * full_drop
+
+
+@pytest.mark.unit
 class TestTheChartsOnThePages:
     def _with_bars(self, loop):
         rows = [{"ticker": "NVDA", "at": timeutil.iso(moment), "open": close, "high": close, "low": close,
@@ -314,7 +363,7 @@ class TestTheChartsOnThePages:
         self._with_bars(day)
         dashboard.build(day.cfg, day.store)
         section = (day.cfg.dashboard_dir / "day-2026-11-11.html").read_text().split('<section id="NVDA">')[1].split("</section>")[0]
-        assert 'aria-label="NVDA price by five-minute bar on 2026-11-11' in section
+        assert 'aria-label="NVDA price every five minutes on 2026-11-11' in section
         assert section.count("<polygon") == 1 and "11-11 10:35 bought 98 at" in section
         assert "90.00" not in section.split("</svg>")[0]              # the pre-market print is not on the axis
 

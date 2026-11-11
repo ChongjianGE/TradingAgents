@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 
 from markdown_it import MarkdownIt
 
-from tradeloop import timeutil
+from tradeloop import pricebars, timeutil
 from tradeloop.config import LoopConfig
 from tradeloop.store import Store
 
@@ -32,6 +32,7 @@ _SESSION = (time(9, 30), time(16, 0))   # the regular session in exchange time: 
 _CHART_DAYS = 10                        # sessions on an overview chart
 _CHART_POINTS = 800                     # beyond this a chart's bars are thinned
 _LABELLED_TRADES = 10                   # beyond this the marks keep their hover text but lose their labels
+_MIN_POINTS = 3                         # an open and one close are not yet a line worth drawing
 # The agents' outputs in the order they were written: (label, path into the saved state).
 _AGENT_TEXTS = (
     ("Market Analyst", ("market_report",)), ("Sentiment Analyst", ("sentiment_report",)),
@@ -161,26 +162,47 @@ def _line_chart(points: list[tuple[datetime, float]], marks: list[tuple[datetime
     return '<div class="chart">' + "".join(parts) + "</svg></div>"
 
 
-def _price_chart(bars: list[tuple[datetime, float]], trades: list[tuple[datetime, str, float, float]] = (),
+def _price_points(rows: list[dict], local) -> list[tuple[datetime, float]]:
+    """Five-minute bars of one ticker as the points of its price line, through the regular session.
+
+    A bar's close is the price at the end of its five minutes, so that is where
+    it is put; drawn at the bar's start, the line would run five minutes ahead
+    of everything marked on it. Each day begins with its first bar's open.
+    """
+    points: list[tuple[datetime, float]] = []
+    for row in rows:
+        start = local(row["at"])
+        if not _SESSION[0] <= start.time() < _SESSION[1]:
+            continue
+        if row.get("open") is not None and (not points or points[-1][0].date() != start.date()):
+            points.append((start, row["open"]))
+        points.append((start + pricebars.WIDTH, row["close"]))
+    return points
+
+
+def _price_chart(points: list[tuple[datetime, float]], trades: list[tuple[datetime, str, float, float]] = (),
                  analyses: list[tuple[datetime, str, str]] = (), height: int = 230, label: str = "") -> str:
     """A ticker's price through the regular session, with each buy and sell marked where it filled.
 
-    ``bars`` are (exchange time, close), oldest first. Time runs by bar rather
-    than by the clock, so nights and weekends take no room; each day is its own
-    line, and what it opened at shows as the step between two lines. ``trades``
-    are (time, side, shares, price); fills of one side inside the same bar are
-    one mark, a triangle whose tip is at the price paid. ``analyses`` are (time,
-    text, tone), drawn as ticks along the bottom. Empty with fewer than two bars.
+    ``points`` are (exchange time, price), oldest first. Time runs by point
+    rather than by the clock, so nights and weekends take no room; each day is
+    its own line, and what it opened at shows as the step between two lines.
+    ``trades`` are (time, side, shares, price): each is a triangle whose tip is
+    at the moment and the price of the fill, so it touches the line unless the
+    fill was away from the prices the line is drawn from. Fills of one side
+    between the same two points are one mark. ``analyses`` are (time, text,
+    tone), drawn as ticks along the bottom. Empty with fewer than three points.
     """
-    if len(bars) < 2:
+    if len(points) < _MIN_POINTS:
         return '<p class="muted">Not enough prices for a chart yet.</p>'
-    if len(bars) > _CHART_POINTS:                       # thin a long record, keeping each day's last bar
-        step = -(-len(bars) // _CHART_POINTS)
-        bars = [b for i, b in enumerate(bars)
-                if i % step == 0 or i + 1 == len(bars) or bars[i + 1][0].date() != b[0].date()]
+    if len(points) > _CHART_POINTS:                     # thin a long record, keeping each day's ends
+        step = -(-len(points) // _CHART_POINTS)
+        points = [q for i, q in enumerate(points)
+                  if i % step == 0 or i + 1 == len(points) or points[i + 1][0].date() != q[0].date()
+                  or points[i - 1][0].date() != q[0].date()]
     width, left, right, top, bottom = 900, 64, 16, 24, 34
     floor = height - bottom
-    times = [t for t, _ in bars]
+    times = [t for t, _ in points]
     slots, slot, day_starts = [], 0, [0]
     for i, moment in enumerate(times):
         if i and moment.date() != times[i - 1].date():
@@ -190,25 +212,36 @@ def _price_chart(bars: list[tuple[datetime, float]], trades: list[tuple[datetime
         slot += 1
     span = slots[-1] or 1
 
-    def x(index: int) -> float:
-        return left + slots[index] / span * (width - left - right)
+    def across(place: float) -> float:
+        return left + place / span * (width - left - right)
 
-    def bar_of(moment: datetime) -> int | None:
-        """The bar a moment falls in, or None when no bar is near it."""
-        index = max(bisect_right(times, moment) - 1, 0)
-        return index if abs(moment - times[index]) <= timedelta(minutes=30) else None
+    def place_of(moment: datetime) -> tuple[int, float] | None:
+        """The point a moment follows and where it falls on the time axis; None when no point is near it."""
+        index = bisect_right(times, moment) - 1
+        if index < 0:
+            return (0, float(slots[0])) if times[0] - moment <= timedelta(minutes=30) else None
+        later = index + 1
+        if later < len(times) and times[later].date() == times[index].date():
+            share = (moment - times[index]) / (times[later] - times[index])
+            return index, slots[index] + share * (slots[later] - slots[index])
+        if moment - times[index] <= timedelta(minutes=30):
+            return index, float(slots[index])           # just after a day's last point
+        if later < len(times) and times[later] - moment <= timedelta(minutes=30):
+            return later, float(slots[later])           # just before the next day's first
+        return None
 
-    # Fills of one side within one bar are one trade to the eye: an order often fills in parts.
-    merged: dict[tuple[int, str], list[float]] = {}
+    # Fills of one side between the same two points are one trade to the eye: an order often fills in parts.
+    merged: dict[tuple[int, str], list] = {}
     for moment, side, qty, price in trades:
-        index = bar_of(moment)
-        if index is not None:
-            total = merged.setdefault((index, side), [0.0, 0.0])
+        found = place_of(moment)
+        if found is not None and qty:
+            total = merged.setdefault((found[0], side), [0.0, 0.0, found[1], moment])
             total[0] += qty
             total[1] += qty * price
-    marks = [(index, side, qty, paid / qty) for (index, side), (qty, paid) in sorted(merged.items()) if qty]
+    marks = [(place, side, qty, paid / qty, moment)
+             for (_, side), (qty, paid, place, moment) in sorted(merged.items(), key=lambda item: item[1][2])]
 
-    values = [v for _, v in bars] + [price for *_, price in marks]
+    values = [v for _, v in points] + [price for _, _, _, price, _ in marks]
     low, high = min(values), max(values)
     pad = (high - low) * 0.12 or max(abs(high) * 0.002, 0.01)
     low, high = low - pad, high + pad
@@ -225,34 +258,37 @@ def _price_chart(bars: list[tuple[datetime, float]], trades: list[tuple[datetime
 
     several = len(day_starts) > 1
     for n, first in enumerate(day_starts):
-        last = (day_starts[n + 1] if n + 1 < len(day_starts) else len(bars)) - 1
+        last = (day_starts[n + 1] if n + 1 < len(day_starts) else len(points)) - 1
         if several:
-            parts.append(f'<text x="{(x(first) + x(last)) / 2:.1f}" y="{height - 6}" text-anchor="middle" {faint}>'
-                         f"{times[first]:%m-%d}</text>")
+            parts.append(f'<text x="{(across(slots[first]) + across(slots[last])) / 2:.1f}" y="{height - 6}" '
+                         f'text-anchor="middle" {faint}>{times[first]:%m-%d}</text>')
         else:
             ends = {first: "start", last: "end"}
             hours = {i: "middle" for i in range(first + 1, last) if times[i].minute == 0 and times[i].hour % 2 == 0
                      and min(i - first, last - i) >= 6}
             for i, anchor in {**hours, **ends}.items():
-                parts.append(f'<text x="{x(i):.1f}" y="{height - 6}" text-anchor="{anchor}" {faint}>{times[i]:%H:%M}</text>')
-        path = " ".join(f"{'M' if i == first else 'L'}{x(i):.1f},{y(bars[i][1]):.1f}" for i in range(first, last + 1))
+                parts.append(f'<text x="{across(slots[i]):.1f}" y="{height - 6}" text-anchor="{anchor}" {faint}>'
+                             f"{times[i]:%H:%M}</text>")
+        path = " ".join(f"{'M' if i == first else 'L'}{across(slots[i]):.1f},{y(points[i][1]):.1f}"
+                        for i in range(first, last + 1))
         parts.append(f'<path d="{path}" fill="none" stroke="currentColor" stroke-width="2" '
                      'stroke-linejoin="round" stroke-linecap="round"/>')
 
     for moment, text, tone in analyses:
-        index = bar_of(moment)
-        if index is not None:
-            parts.append(f'<g class="{tone}"><rect x="{x(index) - 5:.1f}" y="{floor}" width="10" height="12" fill="transparent"/>'
-                         f'<line x1="{x(index):.1f}" x2="{x(index):.1f}" y1="{floor + 2}" y2="{floor + 10}" '
+        found = place_of(moment)
+        if found is not None:
+            cx = across(found[1])
+            parts.append(f'<g class="{tone}"><rect x="{cx - 5:.1f}" y="{floor}" width="10" height="12" fill="transparent"/>'
+                         f'<line x1="{cx:.1f}" x2="{cx:.1f}" y1="{floor + 2}" y2="{floor + 10}" '
                          f'stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/><title>{escape(text)}</title></g>')
 
     labelled = len(marks) <= _LABELLED_TRADES
-    for index, side, qty, price in marks:
-        cx, tip, buy = x(index), y(price), side == "buy"
-        away = 1 if buy else -1                         # a buy sits under the price it paid, a sell above
+    for place, side, qty, price, moment in marks:
+        cx, tip, buy = across(place), y(price), side == "buy"
+        away = 1 if buy else -1                         # a buy hangs under the price it paid, a sell stands on it
         base = tip + away * 11
         shape = f"{cx:.1f},{tip:.1f} {cx - 6.5:.1f},{base:.1f} {cx + 6.5:.1f},{base:.1f}"
-        said = (f"{times[index]:%m-%d %H:%M} {'bought' if buy else 'sold'} {qty:g} at {_money(price)}")
+        said = f"{moment:%m-%d %H:%M} {'bought' if buy else 'sold'} {qty:g} at {_money(price)}"
         parts.append(f'<g class="{"up" if buy else "down"}"><circle cx="{cx:.1f}" cy="{tip + away * 6:.1f}" r="12" fill="transparent"/>'
                      f'<polygon points="{shape}" fill="currentColor" stroke="var(--surface)" stroke-width="2" '
                      f'stroke-linejoin="round" paint-order="stroke"/><title>{escape(said)}</title></g>')
@@ -267,7 +303,7 @@ def _price_chart(bars: list[tuple[datetime, float]], trades: list[tuple[datetime
     if any(side == "sell" for _, side, *_ in marks):
         key.append('<b><span class="down">▼</span> sold</b>')
     if key:
-        key.append("<b>the number is the shares; the tip is the price paid</b>")
+        key.append("<b>the tip is at the time and price of the fill; the number is the shares</b>")
     if analyses:
         key.append("<b>ticks along the bottom: analyses</b>")
     if key:
@@ -313,11 +349,12 @@ class _Data:
         self.fills = q("SELECT * FROM fills ORDER BY at")
         self.outcomes = q("SELECT * FROM outcomes")
         self.events = q("SELECT * FROM events ORDER BY id")
-        self.bars: dict[str, list[tuple[datetime, float]]] = defaultdict(list)
-        for bar in q("SELECT ticker, at, close FROM bars ORDER BY at"):
-            moment = self.local(bar["at"])
-            if _SESSION[0] <= moment.time() < _SESSION[1]:
-                self.bars[bar["ticker"]].append((moment, bar["close"]))
+        by_ticker = defaultdict(list)
+        for bar in q("SELECT ticker, at, open, close FROM bars ORDER BY at"):
+            by_ticker[bar["ticker"]].append(bar)
+        # Each ticker's price line through the regular sessions: (exchange time, price).
+        self.bars: dict[str, list[tuple[datetime, float]]] = defaultdict(
+            list, {ticker: _price_points(rows, self.local) for ticker, rows in by_ticker.items()})
         self.tick_day = {t["tick_id"]: self.day_of(t["scheduled_at"]) for t in self.ticks}
         self.days = sorted(set(self.tick_day.values()))
 
@@ -430,7 +467,7 @@ def _index(data: _Data) -> str:
     for ticker in cfg.tickers:
         recent = sorted({moment.date() for moment, _ in data.bars[ticker]})[-_CHART_DAYS:]
         bars = [b for b in data.bars[ticker] if b[0].date() >= recent[0]] if recent else []
-        if len(bars) < 2:
+        if len(bars) < _MIN_POINTS:
             continue
         trades = [(data.local(f["at"]), f["side"], f["qty"], f["price"]) for f in data.fills if f["ticker"] == ticker]
         marks = [(data.local(a["started_at"]), f'{data.local(a["started_at"]):%m-%d %H:%M} {a["rating"]}',
@@ -441,7 +478,7 @@ def _index(data: _Data) -> str:
                       + _chart_link(cfg, ticker)
                       + (f' <span class="muted">· {held["qty"]:g} held at {_money(held["avg_price"])} on average</span>'
                          if held else ' <span class="muted">· none held</span>') + "</h3>"
-                      + _price_chart(bars, trades, marks, label=f"{ticker} price by five-minute bar, with each "
+                      + _price_chart(bars, trades, marks, label=f"{ticker} price every five minutes, with each "
                                                                 "purchase and sale marked where it filled"))
     if charts:
         parts.append("<section><h2>Each ticker's price, with what was bought and sold</h2>" + "".join(charts) + "</section>")
@@ -618,9 +655,9 @@ def _day(data: _Data, day: str) -> str:
             ])
         bars = [b for b in data.bars[ticker] if b[0].date().isoformat() == day]
         trades = [(data.local(f["at"]), f["side"], f["qty"], f["price"]) for f in fills]
-        chart = (_price_chart(bars, trades, marks, label=f"{ticker} price by five-minute bar on {day}, with each "
+        chart = (_price_chart(bars, trades, marks, label=f"{ticker} price every five minutes on {day}, with each "
                                                          "purchase and sale marked where it filled")
-                 if len(bars) >= 2 else
+                 if len(bars) >= _MIN_POINTS else
                  _line_chart(points, marks, label=f"{ticker} price at each tick, with the day's analyses marked"))
         section = [f'<section id="{escape(ticker)}"><h2>{escape(ticker)}{_chart_link(cfg, ticker)}</h2>', chart,
                    _table(["Time", "Tick", "Price", "Shares held", "Gate", "Ruling", "Orders"], rows, (2, 3))]
