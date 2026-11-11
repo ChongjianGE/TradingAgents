@@ -380,6 +380,36 @@ tradingagents backtest NVDA,AAPL --start 2026-06-01 --end 2026-08-01 --every 7
 
 Each cell is scored on realized alpha against the instrument's regional benchmark, grouped by rating. A decision is entered at the first close after its date, because a run reads news published after that day's close. Your own memory log is never written to, and re-running the same grid with `run_id=result.run_id` skips the cells that already ran, so an interrupted sweep continues where it stopped.
 
+## Trading loop
+
+`tradeloop` runs the analysis on a schedule and turns each decision into a position on a paper account. The analysis is TradingAgents'; everything from the decision to the order is plain code, so the same decision and the same book always give the same orders.
+
+```bash
+tradeloop init        # write a config file to ~/.tradingagents/tradeloop/config.toml
+tradeloop check       # read-only: keys, the paper account, prices, the store (--llm also pings the models)
+tradeloop tick        # run one tick now
+tradeloop run         # run every tick as its time comes, until interrupted
+tradeloop status      # the book, each ticker's standing decision, the next tick
+tradeloop dashboard   # build the pages that show what it did
+```
+
+Each trading day has four kinds of tick, all derived from the exchange calendar, so a half day or a holiday needs no special case:
+
+- `premarket`, 45 minutes before the open: every ticker is analysed, so the day starts with a plan.
+- `core`, every 60 minutes while the market is open: the only ticks that place orders.
+- `postclose`, 30 minutes after the close: every ticker is analysed again, when results and filings land. This is the run recorded in the memory log, one a day.
+- `offhours`, hourly while the market is closed: a rule-only watch that calls the model only when the price or the news gives it a reason.
+
+Within a tick, the tickers that need an analysis are analysed at the same time. A core tick calls the model for a ticker only when something changed since its last analysis: the price moved, headlines came in a burst, or the decision is three hours old. Otherwise the standing decision is reused.
+
+A decision becomes a position through fixed rules, and every check is recorded with its reason. A rating stands for a fraction of a full position (`rating_weights`), and the Portfolio Manager's own target weight can make it smaller, never larger. Reducing a position needs only the decision. Growing one needs two analyses in a row that agree, room in the day's loss limit, and a price target that covers the cost of trading. A position at or under the decision's stop is closed, and that decision cannot buy back in.
+
+`execution = "simulate"` (the default) keeps a book of its own and sends nothing to a broker; its fills pay the configured spread, slippage and fees. `execution = "alpaca_paper"` sends the orders to an Alpaca paper account. The client refuses any other host, so there is no path to a live account. Put the Alpaca paper keys in `APCA_API_KEY_ID` and `APCA_API_SECRET_KEY`, or point `env_file` at a dotenv file that holds them; the same file can hold any key the analysis reads (a model provider's, `FRED_API_KEY`, `TYPESAFE_API_KEY`). `after_dashboard` names a command to run on the dashboard folder each time it is built, for copying the pages somewhere. Market data and the calendar come from Alpaca in both modes.
+
+Everything is kept under `~/.tradingagents/tradeloop` (`TRADELOOP_DATA_DIR` moves it): `tradeloop.db` holds every tick, observation, analysis, ruling, order, fill and outcome; `runs/<run id>/` holds each analysis's texts and every model and tool call it made; `dashboard/` holds the pages built from both. The dashboard has an overview across days and a page per day that opens each analysis to what it was told, what each agent wrote, each step it took, what the rules did with it, and what the price did afterwards.
+
+The loop is a research tool on a paper account. Paper fills are kinder than real ones, and model spend is real: at the defaults, five tickers can cost tens of dollars a day. `daily_llm_budget_usd` caps it, counting the models that have a list price on file (see [Usage log](#cli-usage)); spend on any other model is not counted towards the cap.
+
 ## Reproducibility
 
 TradingAgents is LLM-driven, so two runs of the same ticker and date can differ. This is expected for a research tool built on language models, not a defect. The variation comes from a few distinct sources, and it helps to separate them.

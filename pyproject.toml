@@ -44,12 +44,13 @@ bedrock = [
 
 [project.scripts]
 tradingagents = "cli.main:app"
+tradeloop = "tradeloop.cli:app"
 
 [tool.setuptools.dynamic]
 version = {attr = "tradingagents.__version__"}
 
 [tool.setuptools.packages.find]
-include = ["tradingagents*", "cli*"]
+include = ["tradingagents*", "cli*", "tradeloop*"]
 
 [tool.setuptools.package-data]
 cli = ["static/*"]
