@@ -1,0 +1,26 @@
+{
+ "run_id": "20261111T0935-core-GEV",
+ "ticker": "GEV",
+ "trade_date": "2026-11-11",
+ "as_of_time": "2026-11-11 09:35 EST (regular session)",
+ "session_context": "Earlier in this session for this instrument (exchange time):\n- 03:33 premarket analysis rated it Overweight, target weight 0.25, stop 745\n- 08:45 premarket analysis rated it Overweight, target weight 0.2, stop 715\nIf you now decide differently from the latest of these, say what has changed since it.",
+ "portfolio": {
+  "cash": 100000.0,
+  "currency": "USD",
+  "positions": []
+ },
+ "status": "ok",
+ "error": null,
+ "usage": {
+  "claude-sonnet-5": {
+   "calls": 15,
+   "input_tokens": 175517,
+   "output_tokens": 30144
+  },
+  "claude-opus-5-5": {
+   "calls": 2,
+   "input_tokens": 17314,
+   "output_tokens": 5213
+  }
+ }
+}

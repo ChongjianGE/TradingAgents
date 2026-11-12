@@ -1,0 +1,95 @@
+=== started Wed Nov 11 01:05:12 PST 2026 ===
+tradeloop: NVDA, CSCO, HD, DIS, GEV; execution=alpaca_paper; every 60 min while the market is open. Next tick 11-11 05:00 EST (offhours). Stops after the tick at 11-13 16:30 EST.
+20261111T0500-offhours  ok  0 analysed, 0 failed, 5 reused or skipped, 0 orders
+20261111T0600-offhours  ok  0 analysed, 0 failed, 5 reused or skipped, 0 orders
+20261111T0700-offhours  ok  0 analysed, 0 failed, 5 reused or skipped, 0 orders
+20261111T0800-offhours  ok  0 analysed, 0 failed, 5 reused or skipped, 0 orders
+/Users/cge/Documents/claude_code_prj/TradingAgents/.venv/lib/python3.12/site-packages/langchain_anthropic/chat_models.py:2992: UserWarning: You are attempting to use structured output via forced tool calling, which is not supported when `thinking` is enabled or on claude-opus-5-5. This method will raise an OutputParserException if tool calls are not generated. Consider `method='json_schema'`, disabling `thinking` where supported, or adjusting your prompt to ensure the tool is called.
+  llm = self._get_llm_for_structured_output_when_thinking_is_enabled(
+Reddit RSS fetch failed for r/wallstreetbets+stocks+investing · HD: HTTP Error 403: Forbidden
+Reddit RSS fetch failed for r/wallstreetbets+stocks+investing · GEV: HTTP Error 403: Forbidden
+Reddit RSS 429 for r/wallstreetbets+stocks+investing · NVDA — backing off 67.7s then retrying once
+Reddit RSS 429 for r/wallstreetbets+stocks+investing · CSCO — backing off 68.8s then retrying once
+Reddit RSS 429 for r/wallstreetbets+stocks+investing · DIS — backing off 54.3s then retrying once
+Reddit RSS fetch failed for r/wallstreetbets+stocks+investing · DIS: HTTP Error 403: Forbidden
+Reddit RSS fetch failed for r/wallstreetbets+stocks+investing · NVDA: HTTP Error 429: Too Many Requests
+Reddit RSS fetch failed for r/wallstreetbets+stocks+investing · CSCO: HTTP Error 429: Too Many Requests
+20261111T0845-premarket  ok  5 analysed, 0 failed, 0 reused or skipped, 0 orders
+Reddit RSS fetch failed for r/wallstreetbets+stocks+investing · GEV: HTTP Error 403: Forbidden
+Reddit RSS fetch failed for r/wallstreetbets+stocks+investing · CSCO: HTTP Error 403: Forbidden
+20261111T0935-core  ok  2 analysed, 0 failed, 3 reused or skipped, 3 orders
+Reddit RSS fetch failed for r/wallstreetbets+stocks+investing · NVDA: HTTP Error 403: Forbidden
+Reddit RSS 429 for r/wallstreetbets+stocks+investing · HD — backing off 68.9s then retrying once
+Reddit RSS fetch failed for r/wallstreetbets+stocks+investing · HD: HTTP Error 403: Forbidden
+20261111T1035-core  ok  2 analysed, 0 failed, 3 reused or skipped, 0 orders
+20261111T1135-core  ok  0 analysed, 0 failed, 5 reused or skipped, 0 orders
+Reddit RSS fetch failed for r/wallstreetbets+stocks+investing · NVDA: HTTP Error 403: Forbidden
+Reddit RSS 429 for r/wallstreetbets+stocks+investing · CSCO — backing off 60.7s then retrying once
+Reddit RSS 429 for r/wallstreetbets+stocks+investing · DIS — backing off 53.2s then retrying once
+Reddit RSS 429 for r/wallstreetbets+stocks+investing · GEV — backing off 68.7s then retrying once
+Reddit RSS fetch failed for r/wallstreetbets+stocks+investing · DIS: HTTP Error 429: Too Many Requests
+Reddit RSS fetch failed for r/wallstreetbets+stocks+investing · CSCO: HTTP Error 403: Forbidden
+Reddit RSS fetch failed for r/wallstreetbets+stocks+investing · GEV: HTTP Error 429: Too Many Requests
+20261111T1235-core  ok  4 analysed, 0 failed, 1 reused or skipped, 1 orders
+Reddit RSS fetch failed for r/wallstreetbets+stocks+investing · NVDA: HTTP Error 403: Forbidden
+Reddit RSS 429 for r/wallstreetbets+stocks+investing · HD — backing off 55.5s then retrying once
+Reddit RSS fetch failed for r/wallstreetbets+stocks+investing · HD: HTTP Error 429: Too Many Requests
+20261111T1335-core  ok  2 analysed, 0 failed, 3 reused or skipped, 0 orders
+20261111T1435-core  ok  0 analysed, 0 failed, 5 reused or skipped, 0 orders
+Stopped.
+=== restarted Wed Nov 11 11:48:29 PST 2026 (stops wait for fills) ===
+tradeloop: NVDA, CSCO, HD, DIS, GEV; execution=alpaca_paper; every 60 min while the market is open. Next tick 11-11 15:35 EST (core). Stops after the tick at 11-13 16:30 EST.
+/Users/cge/Documents/claude_code_prj/TradingAgents/.venv/lib/python3.12/site-packages/langchain_anthropic/chat_models.py:2992: UserWarning: You are attempting to use structured output via forced tool calling, which is not supported when `thinking` is enabled or on claude-opus-5-5. This method will raise an OutputParserException if tool calls are not generated. Consider `method='json_schema'`, disabling `thinking` where supported, or adjusting your prompt to ensure the tool is called.
+  llm = self._get_llm_for_structured_output_when_thinking_is_enabled(
+Reddit RSS fetch failed for r/wallstreetbets+stocks+investing · CSCO: HTTP Error 403: Forbidden
+Reddit RSS 429 for r/wallstreetbets+stocks+investing · DIS — backing off 66.7s then retrying once
+Reddit RSS 429 for r/wallstreetbets+stocks+investing · GEV — backing off 48.6s then retrying once
+Reddit RSS fetch failed for r/wallstreetbets+stocks+investing · GEV: HTTP Error 429: Too Many Requests
+Reddit RSS fetch failed for r/wallstreetbets+stocks+investing · DIS: HTTP Error 403: Forbidden
+20261111T1535-core  ok  3 analysed, 0 failed, 2 reused or skipped, 1 orders
+Stopped.
+=== restarted Wed Nov 11 13:05:51 PST 2026 (the model is told what a weight buys) ===
+tradeloop: NVDA, CSCO, HD, DIS, GEV; execution=alpaca_paper; every 60 min while the market is open. Next tick 11-11 16:30 EST (postclose). Stops after the tick at 11-13 16:30 EST.
+/Users/cge/Documents/claude_code_prj/TradingAgents/.venv/lib/python3.12/site-packages/langchain_anthropic/chat_models.py:2992: UserWarning: You are attempting to use structured output via forced tool calling, which is not supported when `thinking` is enabled or on claude-opus-5-5. This method will raise an OutputParserException if tool calls are not generated. Consider `method='json_schema'`, disabling `thinking` where supported, or adjusting your prompt to ensure the tool is called.
+  llm = self._get_llm_for_structured_output_when_thinking_is_enabled(
+Reddit RSS fetch failed for r/wallstreetbets+stocks+investing · NVDA: HTTP Error 403: Forbidden
+Reddit RSS 429 for r/wallstreetbets+stocks+investing · HD — backing off 52.1s then retrying once
+Reddit RSS 429 for r/wallstreetbets+stocks+investing · GEV — backing off 62.7s then retrying once
+Reddit RSS 429 for r/wallstreetbets+stocks+investing · DIS — backing off 50.7s then retrying once
+Reddit RSS 429 for r/wallstreetbets+stocks+investing · CSCO — backing off 60.6s then retrying once
+Vendor 'fred' failed for get_macro_indicators: 502 Server Error: Bad Gateway for url: https://api.stlouisfed.org/fred/series?series_id=FEDFUNDS&realtime_start=2026-11-11&realtime_end=2026-11-11&api_key=***&file_type=json
+Optional macro_data unavailable for get_macro_indicators: 502 Server Error: Bad Gateway for url: https://api.stlouisfed.org/fred/series?series_id=FEDFUNDS&realtime_start=2026-11-11&realtime_end=2026-11-11&api_key=***&file_type=json
+Vendor 'fred' failed for get_macro_indicators: 502 Server Error: Bad Gateway for url: https://api.stlouisfed.org/fred/series?series_id=UNRATE&realtime_start=2026-11-11&realtime_end=2026-11-11&api_key=***&file_type=json
+Optional macro_data unavailable for get_macro_indicators: 502 Server Error: Bad Gateway for url: https://api.stlouisfed.org/fred/series?series_id=UNRATE&realtime_start=2026-11-11&realtime_end=2026-11-11&api_key=***&file_type=json
+Vendor 'fred' failed for get_macro_indicators: 502 Server Error: Bad Gateway for url: https://api.stlouisfed.org/fred/series/observations?series_id=DGS10&observation_start=2026-05-15&observation_end=2026-11-11&sort_order=asc&realtime_start=2026-11-11&realtime_end=2026-11-11&api_key=***&file_type=json
+Optional macro_data unavailable for get_macro_indicators: 502 Server Error: Bad Gateway for url: https://api.stlouisfed.org/fred/series/observations?series_id=DGS10&observation_start=2026-05-15&observation_end=2026-11-11&sort_order=asc&realtime_start=2026-11-11&realtime_end=2026-11-11&api_key=***&file_type=json
+Vendor 'fred' failed for get_macro_indicators: FRED request failed: Bad Request.  Invalid value for variable series_id.  Series IDs should be 25 or less alphanumeric characters.
+Optional macro_data unavailable for get_macro_indicators: FRED request failed: Bad Request.  Invalid value for variable series_id.  Series IDs should be 25 or less alphanumeric characters.
+Reddit RSS fetch failed for r/wallstreetbets+stocks+investing · DIS: HTTP Error 429: Too Many Requests
+Reddit RSS fetch failed for r/wallstreetbets+stocks+investing · HD: HTTP Error 429: Too Many Requests
+Reddit RSS fetch failed for r/wallstreetbets+stocks+investing · CSCO: HTTP Error 403: Forbidden
+Reddit RSS fetch failed for r/wallstreetbets+stocks+investing · GEV: HTTP Error 429: Too Many Requests
+20261111T1630-postclose  ok  5 analysed, 0 failed, 0 reused or skipped, 0 orders
+Stopped.
+=== restarted Wed Nov 11 14:02:12 PST 2026 (dashboard links out to charts) ===
+tradeloop: NVDA, CSCO, HD, DIS, GEV; execution=alpaca_paper; every 60 min while the market is open. Next tick 11-11 18:00 EST (offhours). Stops after the tick at 11-13 16:30 EST.
+Stopped.
+=== restarted Wed Nov 11 14:22:31 PST 2026 (price charts with the trades marked) ===
+tradeloop: NVDA, CSCO, HD, DIS, GEV; execution=alpaca_paper; every 60 min while the market is open. Next tick 11-11 18:00 EST (offhours). Stops after the tick at 11-13 16:30 EST.
+Stopped.
+=== restarted Wed Nov 11 14:23:03 PST 2026 (upload gives up on a stalled connection sooner) ===
+tradeloop: NVDA, CSCO, HD, DIS, GEV; execution=alpaca_paper; every 60 min while the market is open. Next tick 11-11 18:00 EST (offhours). Stops after the tick at 11-13 16:30 EST.
+Stopped.
+=== restarted Wed Nov 11 14:32:18 PST 2026 (chart marks placed at the time of the fill) ===
+tradeloop: NVDA, CSCO, HD, DIS, GEV; execution=alpaca_paper; every 60 min while the market is open. Next tick 11-11 18:00 EST (offhours). Stops after the tick at 11-13 16:30 EST.
+/Users/cge/Documents/claude_code_prj/TradingAgents/.venv/lib/python3.12/site-packages/langchain_anthropic/chat_models.py:2992: UserWarning: You are attempting to use structured output via forced tool calling, which is not supported when `thinking` is enabled or on claude-opus-5-5. This method will raise an OutputParserException if tool calls are not generated. Consider `method='json_schema'`, disabling `thinking` where supported, or adjusting your prompt to ensure the tool is called.
+  llm = self._get_llm_for_structured_output_when_thinking_is_enabled(
+Reddit RSS fetch failed for r/wallstreetbets+stocks+investing · NVDA: HTTP Error 403: Forbidden
+20261111T1800-offhours  ok  1 analysed, 0 failed, 4 reused or skipped, 0 orders
+Stopped.
+=== restarted Wed Nov 11 15:04:39 PST 2026 (interactive candle charts) ===
+tradeloop: NVDA, CSCO, HD, DIS, GEV; execution=alpaca_paper; every 60 min while the market is open. Next tick 11-11 19:00 EST (offhours). Stops after the tick at 11-13 16:30 EST.
+Stopped.
+=== restarted Wed Nov 11 15:07:08 PST 2026 (charts clear old marks before new candles) ===
+tradeloop: NVDA, CSCO, HD, DIS, GEV; execution=alpaca_paper; every 60 min while the market is open. Next tick 11-11 19:00 EST (offhours). Stops after the tick at 11-13 16:30 EST.
+20261111T1900-offhours  ok  0 analysed, 0 failed, 5 reused or skipped, 0 orders

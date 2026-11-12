@@ -1,0 +1,45 @@
+# tradeloop settings. Every key is optional; what is left out keeps its default.
+
+tickers = ["NVDA", "CSCO", "HD", "DIS", "GEV"]
+analysts = ["market", "social", "news", "fundamentals"]
+
+# "simulate" keeps a book of its own and sends nothing to a broker.
+# "alpaca_paper" sends orders to the Alpaca paper account.
+execution = "alpaca_paper"
+sim_starting_cash = 100000.0
+
+# Minutes between ticks while the market is open.
+interval_minutes = 60
+
+# A full position as a share of equity, and all positions together (1.0 = cash only).
+max_position_weight = 0.5
+max_gross_exposure = 1.0
+
+# Model spend allowed per day, in USD. Past it the loop stops calling the model.
+daily_llm_budget_usd = 60.0
+
+# A dotenv file with keys that are not in the environment: the Alpaca paper keys,
+# and any key the analysis reads (a model provider's, FRED, TypeSafe).
+env_file = "~/.config/secrets/tokens.env"
+
+# After each dashboard build, copy the pages to the private Backblaze bucket.
+# rclone copy uploads what changed and never deletes.
+after_dashboard = ["/Users/cge/.claude/skills/b2-vault/scripts/b2", "copy", "--timeout", "60s", "--contimeout", "15s", "{dir}", "b2vault:cge-vault/self_project/TradingAgents/dashboard"]
+
+# No link out to another site beside each ticker: the dashboard draws the price and the trades itself.
+chart_url = ""
+
+# The fraction of a full position each rating stands for; "keep" changes nothing.
+[rating_weights]
+Buy = 1.0
+Overweight = 0.6
+Hold = "keep"
+Underweight = 0.3
+Sell = 0.0
+
+# Overrides for the TradingAgents config.
+[llm]
+# llm_provider = "anthropic"
+# quick_think_llm = "claude-sonnet-5"
+# deep_think_llm = "claude-opus-5-5"
+output_language = "English"
